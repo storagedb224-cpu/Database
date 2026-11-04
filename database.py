@@ -31,7 +31,6 @@ async def get_node(node_id):
 async def update_node_name(node_id, new_name):
     await nodes_col.update_one({"_id": ObjectId(node_id)}, {"$set": {"name": new_name}})
 
-# 🔴 BULK CASCADING DELETE (Ab Pura Data Root Se Delete Hoga!)
 async def get_all_descendants(node_id):
     descendants = []
     children = await get_nodes(str(node_id))
@@ -44,16 +43,13 @@ async def delete_node(node_id):
     node = await get_node(node_id)
     if not node: return
     
-    # 1. Pura khaandan (descendants) dhoondo
     descendants = await get_all_descendants(str(node_id))
     all_node_ids = [ObjectId(node_id)] + [child['_id'] for child in descendants]
     
-    # 2. Saare Topics ki Files (Videos/PDFs) DB se udhao
     topic_ids = [str(node_id)] + [str(child['_id']) for child in descendants if child['type'] == 'topic']
     if topic_ids:
         await files_col.delete_many({"topic_id": {"$in": topic_ids}})
         
-    # 3. Akhir me sabhi folders (nodes) ko ek sath delete kardo
     await nodes_col.delete_many({"_id": {"$in": all_node_ids}})
 
 async def add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, backup_msg_id, index_id, file_name):
@@ -80,11 +76,9 @@ async def get_file(file_id):
 async def delete_file(file_id):
     await files_col.delete_one({"_id": ObjectId(file_id)})
 
-# LIVE STATS DIRECTLY FROM DB
 async def get_stats():
     now = datetime.datetime.utcnow()
     today_start = datetime.datetime(now.year, now.month, now.day)
-    
     stats = {
         "total_channels": await nodes_col.count_documents({"type": "coaching"}),
         "total_courses": await nodes_col.count_documents({"type": "course"}),
@@ -114,28 +108,25 @@ async def get_course_dump_channel(topic_id):
     except Exception:
         return None
 
+# 🟢 001 SEQUENCE FORMAT GENERATOR
 async def get_next_index(course_id):
-    if not course_id: return "01"
+    if not course_id: return "001"
     result = await nodes_col.find_one_and_update(
         {"_id": ObjectId(course_id)},
         {"$inc": {"extra.last_index": 1}},
         return_document=ReturnDocument.AFTER
     )
-    if not result: return "01"
+    if not result: return "001"
     next_index = result.get("extra", {}).get("last_index", 1)
-    return f"{next_index:02d}"
+    return f"{next_index:03d}" # Output: 001, 002, 003... 100
 
-# 📦 JSON EXPORT SYSTEM (For /backup command)
 class MongoEncoder(json.JSONEncoder):
     def default(self, obj):
-        if isinstance(obj, ObjectId):
-            return str(obj)
-        if isinstance(obj, datetime.datetime):
-            return obj.isoformat()
+        if isinstance(obj, ObjectId): return str(obj)
+        if isinstance(obj, datetime.datetime): return obj.isoformat()
         return super().default(obj)
 
 async def export_db_json():
     nodes = await nodes_col.find({}).to_list(length=None)
     files = await files_col.find({}).to_list(length=None)
-    data = {"nodes": nodes, "files": files}
-    return json.dumps(data, cls=MongoEncoder, indent=4)
+    return json.dumps({"nodes": nodes, "files": files}, cls=MongoEncoder, indent=4)
