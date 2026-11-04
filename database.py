@@ -66,8 +66,9 @@ async def add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, ba
     }
     await files_col.insert_one(doc)
 
+# 🟢 FILES WILL ALWAYS SORT BY INDEX_ID (001, 002...)
 async def get_files(topic_id):
-    cursor = files_col.find({"topic_id": str(topic_id)})
+    cursor = files_col.find({"topic_id": str(topic_id)}).collation({"locale": "en", "numericOrdering": True}).sort("index_id", 1)
     return await cursor.to_list(length=1000)
 
 async def get_file(file_id):
@@ -108,7 +109,6 @@ async def get_course_dump_channel(topic_id):
     except Exception:
         return None
 
-# 🟢 001 SEQUENCE FORMAT GENERATOR
 async def get_next_index(course_id):
     if not course_id: return "001"
     result = await nodes_col.find_one_and_update(
@@ -118,7 +118,29 @@ async def get_next_index(course_id):
     )
     if not result: return "001"
     next_index = result.get("extra", {}).get("last_index", 1)
-    return f"{next_index:03d}" # Output: 001, 002, 003... 100
+    return f"{next_index:03d}" 
+
+# 🟢 AUTO FIX INDEX COMMAND LOGIC (/fixindex)
+async def fix_all_indexes():
+    courses = await nodes_col.find({"type": "course"}).to_list(length=None)
+    for course in courses:
+        descendants = await get_all_descendants(str(course['_id']))
+        topic_ids = [str(child['_id']) for child in descendants if child['type'] == 'topic']
+        
+        if not topic_ids: continue
+        
+        # Files ko original time ke hisaab se sort karke uthayega
+        files = await files_col.find({"topic_id": {"$in": topic_ids}}).sort("created_at", 1).to_list(length=None)
+        
+        counter = 1
+        for f in files:
+            new_idx = f"{counter:03d}"
+            await files_col.update_one({"_id": f['_id']}, {"$set": {"index_id": new_idx}})
+            counter += 1
+            
+        extra = course.get('extra', {})
+        extra['last_index'] = counter - 1
+        await nodes_col.update_one({"_id": course['_id']}, {"$set": {"extra": extra}})
 
 class MongoEncoder(json.JSONEncoder):
     def default(self, obj):
