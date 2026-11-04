@@ -3,9 +3,10 @@ import random
 import asyncio
 import time
 import datetime
+import os
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from pyrogram.errors import FloodWait
+from pyrogram.errors import FloodWait, MessageNotModified
 
 import config
 import database as db
@@ -46,6 +47,28 @@ async def is_admin(_, __, message: Message):
 admin_filter = filters.create(is_admin)
 
 # ==========================================
+# 0. BACKUP COMMAND (/backup) 📦
+# ==========================================
+@app.on_message(filters.command("backup") & admin_filter)
+async def backup_db(client, message):
+    status = await message.reply_text("🔄 **Database Backup generating...**")
+    try:
+        json_data = await db.export_db_json()
+        filename = f"StorageBot_Backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(json_data)
+            
+        await message.reply_document(
+            document=filename,
+            caption="📦 **MongoDB Complete Backup**\n\nYeh aapke pure Storage Bot ka data hai. Ise hamesha safe rakhein!"
+        )
+        os.remove(filename)
+        await status.delete()
+    except Exception as e:
+        await status.edit_text(f"❌ Backup Failed: {e}")
+
+# ==========================================
 # 1. MAIN DASHBOARD (/start)
 # ==========================================
 @app.on_message(filters.command("start") & admin_filter)
@@ -58,22 +81,17 @@ async def start_cmd(client, message):
 ╚══════════════════════════╝
 
 👋 नमस्कार {message.from_user.first_name}!
-
 आपका स्वागत है हमारे Advanced Storage System में।
-यहाँ आप अपनी जरूरी Files, Videos, PDFs और Documents को सुरक्षित तरीके से Store और Manage कर सकते हैं।
 
 ✨ OUR FEATURES
 📁 Unlimited File Management
 🎬 Video & Audio Storage
 📚 PDF & Document Storage
 🔍 Instant File Search
-📥 Easy File Access
 🔐 Secure Cloud Storage
-⚡ Fast & Easy Navigation
 
-━━━━━━━━━━━━━━━━━━━━
-💡 Your Files, Your Storage!
-❤️ Thank You For Using Our Storage Bot."""
+💡 /backup - Download Database Data
+━━━━━━━━━━━━━━━━━━━━"""
 
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add Course / Data", callback_data="nav_add_root")],
@@ -83,21 +101,21 @@ async def start_cmd(client, message):
     await message.reply_text(welcome_text, reply_markup=markup)
 
 # ==========================================
-# 2. STATS 
+# 2. LIVE STATS 
 # ==========================================
 @app.on_callback_query(filters.regex("^stats$") & admin_filter)
 async def show_stats(client, callback_query):
     await callback_query.answer() 
     start_time = time.time()
-    stats = await db.get_stats()
+    stats = await db.get_stats() # LIVE FETCH FROM DB
     response_time = int((time.time() - start_time) * 1000)
     
     current_date = datetime.datetime.now().strftime("%d %B %Y")
-    last_updated = datetime.datetime.now().strftime("%I:%M %p")
+    last_updated = datetime.datetime.now().strftime("%I:%M:%S %p")
     
     stats_text = f"""╭━━━━━━━━━━━━━━━━━━━━━━━╮
 💎 STORAGE BOT
-📊 BOT STATISTICS
+📊 LIVE BOT STATISTICS
 ╰━━━━━━━━━━━━━━━━━━━━━━━╯
 
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -107,7 +125,6 @@ async def show_stats(client, callback_query):
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
 
 📦 STORAGE STATISTICS
-
 ➤ 🌐 Total Channels   : "{stats['total_channels']}"
 ➤ 📚 Total Courses    : "{stats['total_courses']}"
 ➤ 🎬 Total Videos     : "{stats['total_videos']}"
@@ -117,19 +134,21 @@ async def show_stats(client, callback_query):
 🆕 TODAY'S UPLOAD REPORT
 ➤ 📥 New Files Today  : "{stats['today_new_files']}"
 ➤ 📅 Date             : "{current_date}"
+
 ━━━━━━━━━━━━━━━━━━━━━━━
 ⚙️ SERVER INFORMATION
 ➤ ⏱️ Uptime           : "{get_uptime()}"
 ➤ 🚀 Response Time    : "{response_time} ms"
-➤ 🔄 Last Updated     : "{last_updated}"
-━━━━━━━━━━━━━━━━━━━━━━━
-✨ Every File. Every Course. One Storage.
-❤️ POWERED BY STORAGE BOT"""
+➤ 🔄 Last Pinned At   : "{last_updated}"
+━━━━━━━━━━━━━━━━━━━━━━━"""
 
-    await callback_query.message.edit_text(stats_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="nav_manage_root")]]))
+    try:
+        await callback_query.message.edit_text(stats_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="nav_manage_root")]]))
+    except MessageNotModified:
+        pass
 
 # ==========================================
-# 3. HIERARCHY NAVIGATION (Strict Add/Manage)
+# 3. HIERARCHY NAVIGATION (Strict Separations)
 # ==========================================
 async def render_nav_menu(client, message_obj, mode, node_id):
     current_node = await db.get_node(node_id)
@@ -142,7 +161,6 @@ async def render_nav_menu(client, message_obj, mode, node_id):
             markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"nav_add_{current_node['parent']}")]])
             await message_obj.edit_text(text, reply_markup=markup)
         else:
-            # MANAGE MODE: Show Files Inside Topic!
             files = await db.get_files(str(current_node['_id']))
             text = f"📂 **Topic Files:** {current_node['name']}\nSelect a file below to manage/delete."
             buttons = []
@@ -158,19 +176,23 @@ async def render_nav_menu(client, message_obj, mode, node_id):
     children = await db.get_nodes(node_id)
     
     action_word = "Add Data into" if mode == "add" else "Manage Data inside"
-    text = f"📂 **{action_word}:** {current_node['name'].upper()}\n⬇️ Select a {child_type.capitalize()}."
+    text = f"📂 **{action_word}:** {current_node['name'].upper()}\n⬇️ Select an option."
     
     buttons = []
     
     if mode == "add":
-        # STRICT ADD MODE (No Manage Options)
+        # PURE ADD MODE - NO EDIT/DELETE OPTIONS HERE
         for child in children:
             buttons.append([InlineKeyboardButton(f"📁 {child['name']} ➔", callback_data=f"nav_add_{child['_id']}")])
         buttons.append([InlineKeyboardButton(f"➕ Add New {child_type.capitalize()}", callback_data=f"add_{node_id}")])
     else:
-        # MANAGE MODE
+        # PURE MANAGE MODE - NAVIGATE INSIDE, EDIT, DELETE
         for child in children:
-            buttons.append([InlineKeyboardButton(f"⚙️ {child['name']}", callback_data=f"opt_{child['_id']}")])
+            buttons.append([InlineKeyboardButton(f"📁 {child['name']} ➔", callback_data=f"nav_manage_{child['_id']}")])
+            
+        if node_id != "root":
+            buttons.append([InlineKeyboardButton(f"✏️ Edit '{current_node['name']}'", callback_data=f"edit_{node_id}")])
+            buttons.append([InlineKeyboardButton(f"🗑 Delete Entire Category", callback_data=f"del_{node_id}")])
             
     if node_id != "root":
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"nav_{mode}_{current_node['parent']}")])
@@ -191,21 +213,8 @@ async def navigate_tree(client, callback_query):
     node_id = callback_query.matches[0].group(2)
     await render_nav_menu(client, callback_query.message, mode, node_id)
 
-@app.on_callback_query(filters.regex("^opt_(.*)") & admin_filter)
-async def node_options(client, callback_query):
-    await callback_query.answer()
-    node_id = callback_query.matches[0].group(1)
-    node = await db.get_node(node_id)
-    text = f"⚙️ **Manage:** {node['name']} ({node['type'].capitalize()})"
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📂 Open Inside", callback_data=f"nav_manage_{node_id}")],
-        [InlineKeyboardButton("✏️ Edit Name", callback_data=f"edit_{node_id}"), InlineKeyboardButton("🗑 Delete", callback_data=f"del_{node_id}")],
-        [InlineKeyboardButton("🔙 Back", callback_data=f"nav_manage_{node['parent']}")]
-    ])
-    await callback_query.message.edit_text(text, reply_markup=markup)
-
 # ==========================================
-# 3.5 FILE MANAGER OPTIONS
+# 4. FILE MANAGER OPTIONS
 # ==========================================
 @app.on_callback_query(filters.regex("^fileopt_(.*)_(.*)") & admin_filter)
 async def file_options(client, callback_query):
@@ -233,7 +242,7 @@ async def delete_file_handler(client, callback_query):
     await render_nav_menu(client, callback_query.message, "manage", topic_id)
 
 # ==========================================
-# 4. ADDING DATA (Triggering States)
+# 5. ADDING DATA (Triggering States)
 # ==========================================
 @app.on_callback_query(filters.regex("^add_(.*)") & admin_filter)
 async def add_trigger(client, callback_query):
@@ -254,7 +263,7 @@ async def add_trigger(client, callback_query):
     await callback_query.message.edit_text(text, reply_markup=markup)
 
 # ==========================================
-# 5. CORE UPLOAD LOGIC & RETRY SYSTEM
+# 6. CORE UPLOAD LOGIC & RETRY SYSTEM
 # ==========================================
 async def process_file_upload(client, file_message, topic_id, status_msg):
     file_type = "video" if file_message.video else "pdf"
@@ -285,7 +294,6 @@ async def process_file_upload(client, file_message, topic_id, status_msg):
     try:
         backup_msg = None
         max_retries = 3
-        
         for attempt in range(max_retries):
             try:
                 backup_msg = await file_message.copy(config.BACKUP_CHANNEL_ID, caption=custom_caption)
@@ -313,7 +321,6 @@ async def process_file_upload(client, file_message, topic_id, status_msg):
                     return await status_msg.edit_text(f"⚠️ Dump Copy Failed!\nError: {e}", reply_markup=btn)
         
         if backup_msg:
-            # Saving everything + File Name to DB
             await db.add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, backup_msg.id, index_id, file_name)
             await status_msg.edit_text(f"✅ **Uploaded! (Index: {index_id})**\n\n🔗 **Link:** `{custom_url}`")
         else:
@@ -341,9 +348,9 @@ async def retry_upload_handler(client, callback_query):
         await callback_query.message.edit_text(f"❌ Retry failed: {e}")
 
 # ==========================================
-# 6. HANDLING ADMIN INPUTS (Auto-Delete System)
+# 7. HANDLING ADMIN INPUTS & MESSAGES
 # ==========================================
-@app.on_message(filters.private & admin_filter & ~filters.command("start"))
+@app.on_message(filters.private & admin_filter & ~filters.command(["start", "backup"]))
 async def handle_inputs(client, message):
     user_id = message.from_user.id
     if user_id not in ADMIN_STATES: return 
@@ -404,29 +411,29 @@ async def handle_inputs(client, message):
     elif current_state == "UPLOAD_MODE":
         if not (message.video or message.document):
             return await message.reply_text("❌ Send a valid Video or PDF document!")
-        
         status_msg = await message.reply_text("🔄 Processing and Uploading...")
         await process_file_upload(client, message, state_data['topic_id'], status_msg)
 
 # ==========================================
-# 7. EDIT / DELETE CALLBACKS
+# 8. EDIT / DELETE CALLBACKS
 # ==========================================
 @app.on_callback_query(filters.regex("^(edit|del)_(.*)") & admin_filter)
 async def edit_delete_handler(client, callback_query):
-    await callback_query.answer()
     action = callback_query.matches[0].group(1)
     node_id = callback_query.matches[0].group(2)
     node = await db.get_node(node_id)
     
     if action == "edit":
+        await callback_query.answer()
         ADMIN_STATES[callback_query.from_user.id] = {"state": "EDIT_NAME", "node_id": node_id, "parent_id": node['parent'], "bot_msg_id": callback_query.message.id}
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"nav_manage_{node['parent']}")]] )
         await callback_query.message.edit_text("📝 Send the new name:", reply_markup=markup)
         
     elif action == "del":
         parent_id = node['parent']
-        # Ab yeh MongoDB se poora data saaf karega!
-        await db.delete_node(node_id)
+        await callback_query.answer("🧹 Pura data root saaf ho raha hai...", show_alert=False)
+        # BHAi YAHAN PAR JADOO CHALEGA (Bulk Deletion Engine)
+        await db.delete_node(node_id) 
         await render_nav_menu(client, callback_query.message, "manage", parent_id)
 
 if __name__ == "__main__":
