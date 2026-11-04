@@ -1,5 +1,6 @@
 import string
 import random
+import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from pyrogram.errors import FloodWait
@@ -194,46 +195,86 @@ async def handle_inputs(client, message):
         topic_id = state_data['topic_id']
         file_type = "video" if message.video else "pdf"
         
-        status_msg = await message.reply_text("🔄 Processing and Forwarding...")
+        # Original file ka naam extract karna
+        file_name = "Unknown_File"
+        if message.video and message.video.file_name:
+            file_name = message.video.file_name
+        elif message.document and message.document.file_name:
+            file_name = message.document.file_name
+
+        status_msg = await message.reply_text("🔄 Processing and Uploading... Please wait.")
+        
+        # Action: Generate Hash and URL
+        custom_hash = generate_hash()
+        url_path = "watch" if file_type == "video" else "pdf"
+        custom_url = f"{config.DOMAIN_NAME}/{url_path}/{custom_hash}"
+        
+        # --- BADIYA CUSTOM CAPTION ---
+        custom_caption = (
+            f"**📁 Name:** `{file_name}`\n"
+            f"**🗂 Type:** `{file_type.capitalize()}`\n\n"
+            f"**🔗 Watch/Download Link:** {custom_url}\n"
+            f"**🔑 File Hash:** `{custom_hash}`\n\n"
+            f"⚡️ *Provided by Premium Storage*"
+        )
         
         try:
-            # Action 1: Universal Backup Channel
-            backup_msg = await message.copy(config.BACKUP_CHANNEL_ID)
+            # Action 1: Universal Backup Channel (With Auto-Retry for Rate Limits)
+            backup_msg = None
+            max_retries = 3
+            
+            for attempt in range(max_retries):
+                try:
+                    # Naya caption pass kiya jaa raha hai (purana auto remove ho jayega)
+                    backup_msg = await message.copy(
+                        config.BACKUP_CHANNEL_ID,
+                        caption=custom_caption 
+                    )
+                    break
+                except FloodWait as e:
+                    await status_msg.edit_text(f"⏳ Telegram Rate Limit. Auto-waiting {e.value} seconds...")
+                    await asyncio.sleep(e.value + 1)
+                except Exception as e:
+                    raise e
             
             # Action 1.5: Course Dump Channel
             dump_channel_id = await db.get_course_dump_channel(topic_id)
             main_msg_id = None
+            
             if dump_channel_id:
-                try:
-                    dump_msg = await message.copy(dump_channel_id)
-                    main_msg_id = dump_msg.id
-                except Exception as e:
-                    await message.reply_text(f"⚠️ Warning: Could not copy to dump channel. {e}")
+                # String ID ko integer me convert karke send karna ensure kar rahe hain
+                clean_dump_id = int(dump_channel_id)
+                for attempt in range(max_retries):
+                    try:
+                        dump_msg = await message.copy(
+                            clean_dump_id,
+                            caption=custom_caption
+                        )
+                        main_msg_id = dump_msg.id
+                        break
+                    except FloodWait as e:
+                        await asyncio.sleep(e.value + 1)
+                    except Exception as e:
+                        await message.reply_text(f"⚠️ Warning: Dump channel me copy nahi hua.\nKripya check karein ki kya Bot us channel ({clean_dump_id}) me ADMIN hai?\nError: {e}")
+                        break
             
-            # Action 2: Generate Hash
-            custom_hash = generate_hash()
+            # Action 2: Save to DB
+            if backup_msg:
+                await db.add_file(
+                    topic_id=topic_id,
+                    file_type=file_type,
+                    custom_hash=custom_hash,
+                    custom_url=custom_url,
+                    main_msg_id=main_msg_id,
+                    backup_msg_id=backup_msg.id
+                )
+                # Reply to Admin
+                await status_msg.edit_text(f"✅ **Uploaded successfully to both channels!**\n\n🔗 **Link:** `{custom_url}`\n📝 **Hash:** `{custom_hash}`")
+            else:
+                await status_msg.edit_text("❌ Upload failed. Could not send to Backup Channel.")
             
-            # Action 3: Generate Custom URL
-            url_path = "watch" if file_type == "video" else "pdf"
-            custom_url = f"{config.DOMAIN_NAME}/{url_path}/{custom_hash}"
-            
-            # Action 4: Save to DB
-            await db.add_file(
-                topic_id=topic_id,
-                file_type=file_type,
-                custom_hash=custom_hash,
-                custom_url=custom_url,
-                main_msg_id=main_msg_id,
-                backup_msg_id=backup_msg.id
-            )
-            
-            # Reply to Admin
-            await status_msg.edit_text(f"✅ **Uploaded successfully!**\n\n🔗 **Link:** `{custom_url}`\n📝 **Hash:** `{custom_hash}`")
-            
-        except FloodWait as e:
-            await status_msg.edit_text(f"❌ Rate limit! Wait {e.value} seconds.")
         except Exception as e:
-            await status_msg.edit_text(f"❌ Upload Error: {e}")
+            await status_msg.edit_text(f"❌ Critical Upload Error: {e}")
 
 # ==========================================
 # 6. EDIT / DELETE CALLBACKS
