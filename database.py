@@ -1,7 +1,10 @@
 from motor.motor_asyncio import AsyncIOMotorClient
-import config
 from bson.objectid import ObjectId
+import config
+import string
+import random
 
+# MongoDB Connection
 client = AsyncIOMotorClient(config.MONGO_URI)
 db = client["StorageBotDB"]
 tree_col = db["tree_data"]  
@@ -23,21 +26,41 @@ async def add_item(name, parent_id, item_type, extra_data=None):
 
 async def delete_item(item_id):
     await tree_col.delete_one({"_id": ObjectId(item_id)})
-    # Aage chal kar isme child items delete karne ka logic bhi add kar sakte hain
 
 async def get_stats():
     coaching_count = await tree_col.count_documents({"type": "coaching"})
     course_count = await tree_col.count_documents({"type": "course"})
-    
     videos_count = await files_col.count_documents({"file_type": "video"})
     pdfs_count = await files_col.count_documents({"file_type": "pdf"})
-    
     return coaching_count, course_count, videos_count, pdfs_count
 
-async def save_file(topic_id, file_type, msg_id):
+def generate_custom_id():
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(random.choices(chars, k=6))
+
+async def get_course_channel_id(topic_id):
+    try:
+        topic = await tree_col.find_one({"_id": ObjectId(topic_id)})
+        teacher = await tree_col.find_one({"_id": ObjectId(topic["parent_id"])})
+        subject = await tree_col.find_one({"_id": ObjectId(teacher["parent_id"])})
+        course = await tree_col.find_one({"_id": ObjectId(subject["parent_id"])})
+        return course.get("channel_id")
+    except Exception as e:
+        print(f"Channel dhundhne me error: {e}")
+        return None
+
+async def save_file(topic_id, file_type, main_msg_id, backup_msg_id):
+    custom_hash = generate_custom_id()
+    folder = "watch" if file_type == "video" else "pdf"
+    custom_url = f"{config.DOMAIN_NAME}/{folder}/{custom_hash}"
+    
     doc = {
+        "custom_hash": custom_hash,
+        "custom_url": custom_url,
         "topic_id": str(topic_id),
         "file_type": file_type,
-        "msg_id": msg_id
+        "main_msg_id": main_msg_id,
+        "backup_msg_id": backup_msg_id
     }
     await files_col.insert_one(doc)
+    return custom_url
