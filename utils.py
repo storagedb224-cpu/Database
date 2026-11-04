@@ -1,9 +1,8 @@
+from functools import wraps  # 🆕 यह लाइन जोड़ी गई है
 import config
 
-# Bot ka state yaad rakhne ke liye (kaun kya add kar raha hai)
 ADMIN_STATES = {}
 
-# Menu ka flow
 HIERARCHY = {
     "coaching": {"next": "course", "title": "Coaching"},
     "course": {"next": "subject", "title": "Course"},
@@ -13,8 +12,8 @@ HIERARCHY = {
     "upload": {"next": None, "title": "Files"}
 }
 
-# Admin check karne wala lock
 def is_admin(func):
+    @wraps(func)  # 🆕 यह लगाना बहुत ज़रूरी है
     async def wrapper(client, message):
         user_id = message.from_user.id if hasattr(message, 'from_user') else message.message.chat.id
         if user_id in config.ADMINS:
