@@ -1,4 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 import config
 from bson import ObjectId
 import datetime
@@ -29,21 +30,48 @@ async def get_node(node_id):
 async def update_node_name(node_id, new_name):
     await nodes_col.update_one({"_id": ObjectId(node_id)}, {"$set": {"name": new_name}})
 
+# 🔴 ADVANCED CASCADING DELETE (Pura Data Saaf Karega)
 async def delete_node(node_id):
+    node = await get_node(node_id)
+    if not node: return
+    
+    # 1. Phele is node ke saare children dhoondo aur unko delete karo (Recursive)
+    children = await get_nodes(node_id)
+    for child in children:
+        await delete_node(str(child['_id']))
+        
+    # 2. Agar yeh 'topic' tha, toh iske andar ki saari Files (videos/pdfs) delete karo
+    if node['type'] == 'topic':
+        await files_col.delete_many({"topic_id": node_id})
+        
+    # 3. Akhir me is Node ko delete kardo
     await nodes_col.delete_one({"_id": ObjectId(node_id)})
 
-async def add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, backup_msg_id, index_id):
+# File Store function me File Name bhi add kiya hai
+async def add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, backup_msg_id, index_id, file_name):
     doc = {
         "topic_id": str(topic_id),
         "file_type": file_type,
         "custom_hash": custom_hash,
         "index_id": index_id,
+        "file_name": file_name,
         "custom_url": custom_url,
         "main_msg_id": main_msg_id,
         "backup_msg_id": backup_msg_id,
         "created_at": datetime.datetime.utcnow()
     }
     await files_col.insert_one(doc)
+
+# Get specific files for a topic
+async def get_files(topic_id):
+    cursor = files_col.find({"topic_id": str(topic_id)})
+    return await cursor.to_list(length=1000)
+
+async def get_file(file_id):
+    return await files_col.find_one({"_id": ObjectId(file_id)})
+
+async def delete_file(file_id):
+    await files_col.delete_one({"_id": ObjectId(file_id)})
 
 async def get_stats():
     now = datetime.datetime.utcnow()
@@ -58,7 +86,6 @@ async def get_stats():
     }
     return stats
 
-# Traceback to find Course ID for Auto-Index Generation
 async def get_course_id(topic_id):
     try:
         topic = await get_node(topic_id)
@@ -66,7 +93,7 @@ async def get_course_id(topic_id):
         subject = await get_node(teacher['parent'])
         course = await get_node(subject['parent'])
         return str(course['_id'])
-    except Exception as e:
+    except Exception:
         return None
 
 async def get_course_dump_channel(topic_id):
@@ -79,18 +106,17 @@ async def get_course_dump_channel(topic_id):
     except Exception:
         return None
 
-# Generate Sequential 01, 02, 03... per course
+# 🟢 ATOMIC INDEX GENERATOR (Kabhi Duplicate Nahi Hoga)
 async def get_next_index(course_id):
     if not course_id: return "01"
-    course = await get_node(course_id)
-    extra = course.get('extra', {})
     
-    current_index = extra.get('last_index', 0)
-    next_index = current_index + 1
-    
-    extra['last_index'] = next_index
-    await nodes_col.update_one(
-        {"_id": ObjectId(course_id)}, 
-        {"$set": {"extra": extra}}
+    # MongoDB natively handles increment + return without race conditions
+    result = await nodes_col.find_one_and_update(
+        {"_id": ObjectId(course_id)},
+        {"$inc": {"extra.last_index": 1}},
+        return_document=ReturnDocument.AFTER
     )
-    return f"{next_index:02d}" # Automatically adds 0 (e.g., 01, 02, 15, 100)
+    
+    if not result: return "01"
+    next_index = result.get("extra", {}).get("last_index", 1)
+    return f"{next_index:02d}"
