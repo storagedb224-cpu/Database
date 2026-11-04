@@ -1,70 +1,64 @@
 from motor.motor_asyncio import AsyncIOMotorClient
-from bson.objectid import ObjectId
 import config
-import string
-import random
+from bson import ObjectId
 
-# MongoDB Connection
 client = AsyncIOMotorClient(config.MONGO_URI)
-db = client["StorageBotDB"]
-tree_col = db["tree_data"]  
-files_col = db["files_data"]  
+db = client['PremiumStorageBot']
+nodes_col = db['nodes'] # Coaching, Course, Subject, etc.
+files_col = db['files'] # Videos and PDFs
 
-async def get_items(parent_id, item_type):
-    cursor = tree_col.find({"parent_id": str(parent_id), "type": item_type})
+async def add_node(name, node_type, parent_id, extra=None):
+    doc = {
+        "name": name,
+        "type": node_type,
+        "parent": parent_id,
+        "extra": extra or {}
+    }
+    result = await nodes_col.insert_one(doc)
+    return str(result.inserted_id)
+
+async def get_nodes(parent_id):
+    cursor = nodes_col.find({"parent": parent_id})
     return await cursor.to_list(length=1000)
 
-async def get_item_by_id(item_id):
-    return await tree_col.find_one({"_id": ObjectId(item_id)})
+async def get_node(node_id):
+    if node_id == "root": return {"_id": "root", "name": "Root", "type": "root"}
+    return await nodes_col.find_one({"_id": ObjectId(node_id)})
 
-async def add_item(name, parent_id, item_type, extra_data=None):
-    doc = {"name": name, "parent_id": str(parent_id), "type": item_type}
-    if extra_data:
-        doc.update(extra_data)
-    res = await tree_col.insert_one(doc)
-    return str(res.inserted_id)
+async def update_node_name(node_id, new_name):
+    await nodes_col.update_one({"_id": ObjectId(node_id)}, {"$set": {"name": new_name}})
 
-async def delete_item(item_id):
-    await tree_col.delete_one({"_id": ObjectId(item_id)})
+async def delete_node(node_id):
+    # Note: Advanced cascading delete can be implemented here later
+    await nodes_col.delete_one({"_id": ObjectId(node_id)})
 
-# 🆕 नया फंक्शन: नाम एडिट करने के लिए
-async def update_item_name(item_id, new_name):
-    await tree_col.update_one({"_id": ObjectId(item_id)}, {"$set": {"name": new_name}})
-
-async def get_stats():
-    coaching_count = await tree_col.count_documents({"type": "coaching"})
-    course_count = await tree_col.count_documents({"type": "course"})
-    videos_count = await files_col.count_documents({"file_type": "video"})
-    pdfs_count = await files_col.count_documents({"file_type": "pdf"})
-    return coaching_count, course_count, videos_count, pdfs_count
-
-def generate_custom_id():
-    chars = string.ascii_uppercase + string.digits
-    return ''.join(random.choices(chars, k=6))
-
-async def get_course_channel_id(topic_id):
-    try:
-        topic = await tree_col.find_one({"_id": ObjectId(topic_id)})
-        teacher = await tree_col.find_one({"_id": ObjectId(topic["parent_id"])})
-        subject = await tree_col.find_one({"_id": ObjectId(teacher["parent_id"])})
-        course = await tree_col.find_one({"_id": ObjectId(subject["parent_id"])})
-        return course.get("channel_id")
-    except Exception as e:
-        print(f"Error: {e}")
-        return None
-
-async def save_file(topic_id, file_type, main_msg_id, backup_msg_id):
-    custom_hash = generate_custom_id()
-    folder = "watch" if file_type == "video" else "pdf"
-    custom_url = f"{config.DOMAIN_NAME}/{folder}/{custom_hash}"
-    
+async def add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, backup_msg_id):
     doc = {
-        "custom_hash": custom_hash,
-        "custom_url": custom_url,
         "topic_id": str(topic_id),
         "file_type": file_type,
+        "custom_hash": custom_hash,
+        "custom_url": custom_url,
         "main_msg_id": main_msg_id,
         "backup_msg_id": backup_msg_id
     }
     await files_col.insert_one(doc)
-    return custom_url
+
+async def get_stats():
+    stats = {
+        "Coachings": await nodes_col.count_documents({"type": "coaching"}),
+        "Courses": await nodes_col.count_documents({"type": "course"}),
+        "Topics": await nodes_col.count_documents({"type": "topic"}),
+        "Files (Videos/PDFs)": await files_col.count_documents({})
+    }
+    return stats
+
+# Helper to trace back to Course Level
+async def get_course_dump_channel(topic_id):
+    try:
+        topic = await get_node(topic_id)
+        teacher = await get_node(topic['parent'])
+        subject = await get_node(teacher['parent'])
+        course = await get_node(subject['parent'])
+        return course['extra'].get('dump_channel')
+    except Exception as e:
+        return None
