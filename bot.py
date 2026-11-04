@@ -47,7 +47,7 @@ async def is_admin(_, __, message: Message):
 admin_filter = filters.create(is_admin)
 
 # ==========================================
-# 0. BACKUP COMMAND (/backup)
+# 0. BACKUP & FIX-INDEX COMMANDS 
 # ==========================================
 @app.on_message(filters.command("backup") & admin_filter)
 async def backup_db(client, message):
@@ -61,6 +61,15 @@ async def backup_db(client, message):
         await status.delete()
     except Exception as e:
         await status.edit_text(f"❌ Backup Failed: {e}")
+
+@app.on_message(filters.command("fixindex") & admin_filter)
+async def fix_indexes(client, message):
+    status = await message.reply_text("🔄 **Database Index Fixer Started...**\nSabhi purani files ko 001, 002 format me set kiya jaa raha hai.")
+    try:
+        await db.fix_all_indexes()
+        await status.edit_text("✅ **All Indexes Fixed Successfully!**\nAb saara data properly 001, 002 order me set ho gaya hai.")
+    except Exception as e:
+        await status.edit_text(f"❌ Index Fix Failed: {e}")
 
 # ==========================================
 # 1. MAIN DASHBOARD (/start)
@@ -81,10 +90,10 @@ async def start_cmd(client, message):
 📁 Unlimited File Management
 🎬 Video & Audio Storage
 📚 PDF & Document Storage
-🔍 Instant File Search
 🔐 Secure Cloud Storage
 
-💡 /backup - Download Database Data
+💡 /backup - Download Database
+💡 /fixindex - Re-order messed up Indexes
 ━━━━━━━━━━━━━━━━━━━━"""
 
     markup = InlineKeyboardMarkup([
@@ -103,7 +112,6 @@ async def show_stats(client, callback_query):
     start_time = time.time()
     stats = await db.get_stats()
     response_time = int((time.time() - start_time) * 1000)
-    
     current_date = datetime.datetime.now().strftime("%d %B %Y")
     last_updated = datetime.datetime.now().strftime("%I:%M:%S %p")
     
@@ -246,7 +254,7 @@ async def add_trigger(client, callback_query):
     await callback_query.message.edit_text(text, reply_markup=markup)
 
 # ==========================================
-# 6. CORE UPLOAD LOGIC & RETRY SYSTEM
+# 6. CORE UPLOAD LOGIC & 10-SEC AUTO CLEANUP
 # ==========================================
 async def process_file_upload(client, file_message, topic_id, status_msg, existing_index=None):
     file_type = "video" if file_message.video else "pdf"
@@ -260,7 +268,6 @@ async def process_file_upload(client, file_message, topic_id, status_msg, existi
     except Exception:
         return await status_msg.edit_text("❌ Database Hierarchy Error!")
 
-    # 🟢 EXISTING INDEX USE FOR RETRY!
     index_id = existing_index if existing_index else await db.get_next_index(course_id)
     custom_hash = generate_hash() 
     url_path = "watch" if file_type == "video" else "pdf"
@@ -307,11 +314,15 @@ async def process_file_upload(client, file_message, topic_id, status_msg, existi
         if backup_msg:
             await db.add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, backup_msg.id, index_id, file_name)
             
-            # 🟢 AUTO-DELETE USER'S LARGE VIDEO MESSAGE!
-            await file_message.delete()
+            # 🟢 1. Delete user's original heavy video
+            try: await file_message.delete()
+            except: pass
             
-            # 🟢 CLEAN SUCCESS LOG
-            await status_msg.edit_text(f"✅ `{file_name}` **(Index: {index_id})** Secured!")
+            # 🟢 2. Show Success and Auto-Delete status message after 10 seconds to keep Chat CLEAN!
+            await status_msg.edit_text(f"✅ `{file_name}` **(Index: {index_id})** Secured!\n*(🗑 Message will auto-delete in 10s...)*")
+            await asyncio.sleep(10)
+            try: await status_msg.delete()
+            except: pass
         else:
             await status_msg.edit_text("❌ Upload failed.")
             
@@ -332,15 +343,14 @@ async def retry_upload_handler(client, callback_query):
     await callback_query.message.edit_text("🔄 Retrying Upload...")
     try:
         original_msg = await client.get_messages(data["chat_id"], data["message_id"])
-        # Pass existing Index ID so it is not wasted
         await process_file_upload(client, original_msg, data["topic_id"], callback_query.message, existing_index=data["index_id"])
     except Exception as e:
         await callback_query.message.edit_text(f"❌ Retry failed: {e}")
 
 # ==========================================
-# 7. HANDLING ADMIN INPUTS & MESSAGES
+# 7. HANDLING NORMAL TEXT MESSAGES
 # ==========================================
-@app.on_message(filters.private & admin_filter & ~filters.command(["start", "backup"]))
+@app.on_message(filters.private & admin_filter & ~filters.command(["start", "backup", "fixindex"]))
 async def handle_inputs(client, message):
     user_id = message.from_user.id
     if user_id not in ADMIN_STATES: return 
@@ -399,7 +409,9 @@ async def handle_inputs(client, message):
         if not (message.video or message.document):
             return await message.reply_text("❌ Send a valid Video or PDF document!")
         status_msg = await message.reply_text(f"🔄 Processing file...")
-        await process_file_upload(client, message, state_data['topic_id'], status_msg)
+        
+        # We start the background task so chat isn't locked up during batch uploads
+        asyncio.create_task(process_file_upload(client, message, state_data['topic_id'], status_msg))
 
 # ==========================================
 # 8. EDIT / DELETE CALLBACKS
