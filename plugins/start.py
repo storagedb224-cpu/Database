@@ -1,10 +1,10 @@
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import database
-from utils import ADMIN_STATES, is_admin
+from utils import ADMIN_STATES, admin_filter  # 🆕 admin_filter इम्पोर्ट किया
 
-@Client.on_message(filters.command("start") & filters.private)
-@is_admin
+# 🆕 @is_admin हटाकर admin_filter को लाइन में ही जोड़ दिया
+@Client.on_message(filters.command("start") & filters.private & admin_filter)
 async def start_cmd(client, message):
     if message.from_user.id in ADMIN_STATES:
         del ADMIN_STATES[message.from_user.id]
