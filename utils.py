@@ -1,4 +1,4 @@
-from functools import wraps  # 🆕 यह लाइन जोड़ी गई है
+from pyrogram import filters
 import config
 
 ADMIN_STATES = {}
@@ -12,10 +12,10 @@ HIERARCHY = {
     "upload": {"next": None, "title": "Files"}
 }
 
-def is_admin(func):
-    @wraps(func)  # 🆕 यह लगाना बहुत ज़रूरी है
-    async def wrapper(client, message):
-        user_id = message.from_user.id if hasattr(message, 'from_user') else message.message.chat.id
-        if user_id in config.ADMINS:
-            return await func(client, message)
-    return wrapper
+# 🆕 Pyrogram का नेटिव कस्टम एडमिन फिल्टर
+async def check_admin(_, client, message):
+    if hasattr(message, 'from_user') and message.from_user:
+        return message.from_user.id in config.ADMINS
+    return False
+
+admin_filter = filters.create(check_admin)
