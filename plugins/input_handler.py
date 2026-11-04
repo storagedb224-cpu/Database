@@ -2,10 +2,10 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import database
 import config
-from utils import ADMIN_STATES, HIERARCHY, is_admin
+from utils import ADMIN_STATES, HIERARCHY, admin_filter  # 🆕 admin_filter इम्पोर्ट किया
 
-@Client.on_message((filters.text | filters.photo | filters.document | filters.video) & filters.private)
-@is_admin
+# 🆕 @is_admin हटाकर admin_filter को लाइन में ही जोड़ दिया
+@Client.on_message((filters.text | filters.photo | filters.document | filters.video) & filters.private & admin_filter)
 async def handle_inputs(client, message):
     user_id = message.from_user.id
     if user_id not in ADMIN_STATES:
