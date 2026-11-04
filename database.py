@@ -1,44 +1,43 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 import config
-import string
-import random
+from bson.objectid import ObjectId
 
-# MongoDB कनेक्शन
 client = AsyncIOMotorClient(config.MONGO_URI)
-db = client["CourseStorageDB"]
+db = client["StorageBotDB"]
+tree_col = db["tree_data"]  
+files_col = db["files_data"]  
 
-# कलेक्शन्स (Collections)
-tree_col = db["course_tree"]  # कोचिंग, कोर्स, सब्जेक्ट के नाम के लिए
-files_col = db["files_data"]  # फाइल्स के लिंक्स और ID के लिए
+async def get_items(parent_id, item_type):
+    cursor = tree_col.find({"parent_id": str(parent_id), "type": item_type})
+    return await cursor.to_list(length=1000)
 
-async def get_items(parent_id, category_type):
-    # डेटाबेस से बटन बनाने के लिए लिस्ट निकालना
-    cursor = tree_col.find({"parent_id": parent_id, "type": category_type})
-    return await cursor.to_list(length=100)
+async def get_item_by_id(item_id):
+    return await tree_col.find_one({"_id": ObjectId(item_id)})
 
-async def add_item(name, parent_id, category_type):
-    # नया नाम (कोचिंग, कोर्स आदि) जोड़ना
-    item = {"name": name, "parent_id": parent_id, "type": category_type}
-    result = await tree_col.insert_one(item)
-    return str(result.inserted_id)
+async def add_item(name, parent_id, item_type, extra_data=None):
+    doc = {"name": name, "parent_id": str(parent_id), "type": item_type}
+    if extra_data:
+        doc.update(extra_data)
+    res = await tree_col.insert_one(doc)
+    return str(res.inserted_id)
 
-def generate_custom_id():
-    # यूनिक कस्टम ID (जैसे A1B2C) बनाना
-    chars = string.ascii_uppercase + string.digits
-    return ''.join(random.choices(chars, k=6))
+async def delete_item(item_id):
+    await tree_col.delete_one({"_id": ObjectId(item_id)})
+    # Aage chal kar isme child items delete karne ka logic bhi add kar sakte hain
 
-async def save_file_data(file_type, file_id, msg_id, backup_msg_id, tree_path):
-    # फाइल को मोंगो डीबी में सेव करना
-    custom_hash = generate_custom_id()
-    custom_url = f"{config.DOMAIN_NAME}/{'watch' if file_type == 'video' else 'pdf'}/{custom_hash}"
+async def get_stats():
+    coaching_count = await tree_col.count_documents({"type": "coaching"})
+    course_count = await tree_col.count_documents({"type": "course"})
     
-    data = {
-        "custom_hash": custom_hash,
-        "custom_url": custom_url,
-        "main_msg_id": msg_id,
-        "backup_msg_id": backup_msg_id,
-        "tree_path": tree_path, # इसमें कोचिंग से लेकर टॉपिक तक की IDs होंगी
-        "file_type": file_type
+    videos_count = await files_col.count_documents({"file_type": "video"})
+    pdfs_count = await files_col.count_documents({"file_type": "pdf"})
+    
+    return coaching_count, course_count, videos_count, pdfs_count
+
+async def save_file(topic_id, file_type, msg_id):
+    doc = {
+        "topic_id": str(topic_id),
+        "file_type": file_type,
+        "msg_id": msg_id
     }
-    await files_col.insert_one(data)
-    return custom_url
+    await files_col.insert_one(doc)
