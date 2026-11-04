@@ -32,15 +32,16 @@ async def update_node_name(node_id, new_name):
 async def delete_node(node_id):
     await nodes_col.delete_one({"_id": ObjectId(node_id)})
 
-async def add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, backup_msg_id):
+async def add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, backup_msg_id, index_id):
     doc = {
         "topic_id": str(topic_id),
         "file_type": file_type,
         "custom_hash": custom_hash,
+        "index_id": index_id,
         "custom_url": custom_url,
         "main_msg_id": main_msg_id,
         "backup_msg_id": backup_msg_id,
-        "created_at": datetime.datetime.utcnow() # Naya addition for daily stats
+        "created_at": datetime.datetime.utcnow()
     }
     await files_col.insert_one(doc)
 
@@ -57,12 +58,39 @@ async def get_stats():
     }
     return stats
 
-async def get_course_dump_channel(topic_id):
+# Traceback to find Course ID for Auto-Index Generation
+async def get_course_id(topic_id):
     try:
         topic = await get_node(topic_id)
         teacher = await get_node(topic['parent'])
         subject = await get_node(teacher['parent'])
         course = await get_node(subject['parent'])
-        return course['extra'].get('dump_channel')
+        return str(course['_id'])
     except Exception as e:
         return None
+
+async def get_course_dump_channel(topic_id):
+    try:
+        course_id = await get_course_id(topic_id)
+        if course_id:
+            course = await get_node(course_id)
+            return course['extra'].get('dump_channel')
+        return None
+    except Exception:
+        return None
+
+# Generate Sequential 01, 02, 03... per course
+async def get_next_index(course_id):
+    if not course_id: return "01"
+    course = await get_node(course_id)
+    extra = course.get('extra', {})
+    
+    current_index = extra.get('last_index', 0)
+    next_index = current_index + 1
+    
+    extra['last_index'] = next_index
+    await nodes_col.update_one(
+        {"_id": ObjectId(course_id)}, 
+        {"$set": {"extra": extra}}
+    )
+    return f"{next_index:02d}" # Automatically adds 0 (e.g., 01, 02, 15, 100)
