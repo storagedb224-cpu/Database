@@ -27,6 +27,10 @@ async def add_item(name, parent_id, item_type, extra_data=None):
 async def delete_item(item_id):
     await tree_col.delete_one({"_id": ObjectId(item_id)})
 
+# 🆕 नया फंक्शन: नाम एडिट करने के लिए
+async def update_item_name(item_id, new_name):
+    await tree_col.update_one({"_id": ObjectId(item_id)}, {"$set": {"name": new_name}})
+
 async def get_stats():
     coaching_count = await tree_col.count_documents({"type": "coaching"})
     course_count = await tree_col.count_documents({"type": "course"})
@@ -46,7 +50,7 @@ async def get_course_channel_id(topic_id):
         course = await tree_col.find_one({"_id": ObjectId(subject["parent_id"])})
         return course.get("channel_id")
     except Exception as e:
-        print(f"Channel dhundhne me error: {e}")
+        print(f"Error: {e}")
         return None
 
 async def save_file(topic_id, file_type, main_msg_id, backup_msg_id):
