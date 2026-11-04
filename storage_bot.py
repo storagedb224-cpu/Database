@@ -97,7 +97,11 @@ async def handle_files(client, message):
         )
         
         await message.reply_text(f"✅ फाइल सेव हो गई!\n🔗 लिंक: `{custom_url}`")
+# ... आपका बाकी का बॉट कोड ...
 
 if __name__ == "__main__":
+    from keep_alive import keep_alive
+    keep_alive()  # यह बैकग्राउंड में पोर्ट चालू कर देगा
+    
     print("Storage Bot चालू हो गया है...")
     app.run()
