@@ -87,7 +87,7 @@ async def start_cmd(client, message):
 # ==========================================
 @app.on_callback_query(filters.regex("^stats$") & admin_filter)
 async def show_stats(client, callback_query):
-    await callback_query.answer() # INSTANT ANSWER FIX SLOWNESS
+    await callback_query.answer() 
     start_time = time.time()
     stats = await db.get_stats()
     response_time = int((time.time() - start_time) * 1000)
@@ -129,30 +129,46 @@ async def show_stats(client, callback_query):
     await callback_query.message.edit_text(stats_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="nav_manage_root")]]))
 
 # ==========================================
-# 3. HIERARCHY NAVIGATION (Single Message Update)
+# 3. HIERARCHY NAVIGATION (Strict Add/Manage)
 # ==========================================
 async def render_nav_menu(client, message_obj, mode, node_id):
     current_node = await db.get_node(node_id)
     node_type = current_node['type']
     
     if node_type == "topic":
-        ADMIN_STATES[message_obj.chat.id] = {"state": "UPLOAD_MODE", "topic_id": str(current_node['_id']), "bot_msg_id": message_obj.id}
-        text = f"📂 **Topic:** {current_node['name']}\n\n📤 **UPLOAD MODE ACTIVATED!**\nSend Videos/PDFs here. They will be dual-backed up automatically."
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"nav_{mode}_{current_node['parent']}")]])
-        await message_obj.edit_text(text, reply_markup=markup)
+        if mode == "add":
+            ADMIN_STATES[message_obj.chat.id] = {"state": "UPLOAD_MODE", "topic_id": str(current_node['_id']), "bot_msg_id": message_obj.id}
+            text = f"📂 **Topic:** {current_node['name']}\n\n📤 **UPLOAD MODE ACTIVATED!**\nSend Videos/PDFs here. They will be dual-backed up automatically."
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"nav_add_{current_node['parent']}")]])
+            await message_obj.edit_text(text, reply_markup=markup)
+        else:
+            # MANAGE MODE: Show Files Inside Topic!
+            files = await db.get_files(str(current_node['_id']))
+            text = f"📂 **Topic Files:** {current_node['name']}\nSelect a file below to manage/delete."
+            buttons = []
+            for f in files:
+                fname = f.get('file_name', 'Unknown')
+                if len(fname) > 25: fname = fname[:22] + "..."
+                buttons.append([InlineKeyboardButton(f"📄 [{f.get('index_id', '00')}] {fname}", callback_data=f"fileopt_{f['_id']}_{current_node['_id']}")])
+            buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"nav_manage_{current_node['parent']}")])
+            await message_obj.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
         return
 
     child_type = LEVELS[node_type]
     children = await db.get_nodes(node_id)
-    action_word = "Add Data into" if mode == "add" else "Manage"
+    
+    action_word = "Add Data into" if mode == "add" else "Manage Data inside"
     text = f"📂 **{action_word}:** {current_node['name'].upper()}\n⬇️ Select a {child_type.capitalize()}."
     
     buttons = []
+    
     if mode == "add":
+        # STRICT ADD MODE (No Manage Options)
         for child in children:
             buttons.append([InlineKeyboardButton(f"📁 {child['name']} ➔", callback_data=f"nav_add_{child['_id']}")])
         buttons.append([InlineKeyboardButton(f"➕ Add New {child_type.capitalize()}", callback_data=f"add_{node_id}")])
     else:
+        # MANAGE MODE
         for child in children:
             buttons.append([InlineKeyboardButton(f"⚙️ {child['name']}", callback_data=f"opt_{child['_id']}")])
             
@@ -170,7 +186,7 @@ async def main_menu_handler(client, callback_query):
 
 @app.on_callback_query(filters.regex("^nav_(add|manage)_(.*)") & admin_filter)
 async def navigate_tree(client, callback_query):
-    await callback_query.answer() # PREVENTS 'NOT RESPONDING' ERROR
+    await callback_query.answer()
     mode = callback_query.matches[0].group(1)
     node_id = callback_query.matches[0].group(2)
     await render_nav_menu(client, callback_query.message, mode, node_id)
@@ -189,6 +205,34 @@ async def node_options(client, callback_query):
     await callback_query.message.edit_text(text, reply_markup=markup)
 
 # ==========================================
+# 3.5 FILE MANAGER OPTIONS
+# ==========================================
+@app.on_callback_query(filters.regex("^fileopt_(.*)_(.*)") & admin_filter)
+async def file_options(client, callback_query):
+    await callback_query.answer()
+    file_id = callback_query.matches[0].group(1)
+    topic_id = callback_query.matches[0].group(2)
+    f = await db.get_file(file_id)
+    
+    if not f: 
+        return await callback_query.answer("File not found in DB!", show_alert=True)
+    
+    text = f"⚙️ **Manage File:**\n\n📄 **Name:** {f.get('file_name', 'Unknown')}\n🔖 **Index:** {f.get('index_id', '00')}\n🔗 **URL:** {f.get('custom_url')}"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗑 Delete File Record", callback_data=f"delfile_{file_id}_{topic_id}")],
+        [InlineKeyboardButton("🔙 Back", callback_data=f"nav_manage_{topic_id}")]
+    ])
+    await callback_query.message.edit_text(text, reply_markup=markup)
+
+@app.on_callback_query(filters.regex("^delfile_(.*)_(.*)") & admin_filter)
+async def delete_file_handler(client, callback_query):
+    file_id = callback_query.matches[0].group(1)
+    topic_id = callback_query.matches[0].group(2)
+    await db.delete_file(file_id)
+    await callback_query.answer("File Deleted from DataBase!", show_alert=True)
+    await render_nav_menu(client, callback_query.message, "manage", topic_id)
+
+# ==========================================
 # 4. ADDING DATA (Triggering States)
 # ==========================================
 @app.on_callback_query(filters.regex("^add_(.*)") & admin_filter)
@@ -198,7 +242,6 @@ async def add_trigger(client, callback_query):
     parent_node = await db.get_node(parent_id)
     child_type = LEVELS[parent_node['type']]
     
-    # Save bot message ID to edit later instead of sending new msg
     ADMIN_STATES[callback_query.from_user.id] = {
         "state": "ADD_COURSE_NAME" if child_type == "course" else f"ADD_{child_type.upper()}",
         "parent_id": parent_id,
@@ -225,9 +268,8 @@ async def process_file_upload(client, file_message, topic_id, status_msg):
     except Exception:
         return await status_msg.edit_text("❌ Database Hierarchy Error!")
 
-    # SEQUENTIAL INDEX GENERATOR (01, 02, 03...)
     index_id = await db.get_next_index(course_id)
-    custom_hash = generate_hash() # Used for safe URL only
+    custom_hash = generate_hash() 
     url_path = "watch" if file_type == "video" else "pdf"
     custom_url = f"{config.DOMAIN_NAME}/{url_path}/{custom_hash}"
     
@@ -270,9 +312,9 @@ async def process_file_upload(client, file_message, topic_id, status_msg):
                     btn = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Retry Upload", callback_data=f"retry_{fail_id}")]])
                     return await status_msg.edit_text(f"⚠️ Dump Copy Failed!\nError: {e}", reply_markup=btn)
         
-        # ERROR FIXED: backup_msg_id -> backup_msg.id
         if backup_msg:
-            await db.add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, backup_msg.id, index_id)
+            # Saving everything + File Name to DB
+            await db.add_file(topic_id, file_type, custom_hash, custom_url, main_msg_id, backup_msg.id, index_id, file_name)
             await status_msg.edit_text(f"✅ **Uploaded! (Index: {index_id})**\n\n🔗 **Link:** `{custom_url}`")
         else:
             await status_msg.edit_text("❌ Upload failed.")
@@ -309,9 +351,8 @@ async def handle_inputs(client, message):
     state_data = ADMIN_STATES[user_id]
     current_state = state_data.get("state")
     
-    # Text input wale states jahan user message delete karna hai
     if current_state != "UPLOAD_MODE":
-        await message.delete() # Automatically delete user text to keep chat clean
+        await message.delete() 
         try:
             bot_msg = await client.get_messages(message.chat.id, state_data['bot_msg_id'])
         except Exception:
@@ -337,7 +378,7 @@ async def handle_inputs(client, message):
         await db.add_node(c_data['name'], "course", parent_id, extra={"dump_channel": c_data['dump_channel'], "thumb": message.photo.file_id})
         
         await bot_msg.edit_text("✅ Course created successfully!")
-        await asyncio.sleep(1) # Small delay for smooth UI
+        await asyncio.sleep(1)
         await render_nav_menu(client, bot_msg, "add", parent_id)
 
     elif current_state.startswith("ADD_"):
@@ -364,7 +405,6 @@ async def handle_inputs(client, message):
         if not (message.video or message.document):
             return await message.reply_text("❌ Send a valid Video or PDF document!")
         
-        # Keep user video message safe, just reply to it with status
         status_msg = await message.reply_text("🔄 Processing and Uploading...")
         await process_file_upload(client, message, state_data['topic_id'], status_msg)
 
@@ -380,11 +420,12 @@ async def edit_delete_handler(client, callback_query):
     
     if action == "edit":
         ADMIN_STATES[callback_query.from_user.id] = {"state": "EDIT_NAME", "node_id": node_id, "parent_id": node['parent'], "bot_msg_id": callback_query.message.id}
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"nav_manage_{node['parent']}")]])
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"nav_manage_{node['parent']}")]] )
         await callback_query.message.edit_text("📝 Send the new name:", reply_markup=markup)
         
     elif action == "del":
         parent_id = node['parent']
+        # Ab yeh MongoDB se poora data saaf karega!
         await db.delete_node(node_id)
         await render_nav_menu(client, callback_query.message, "manage", parent_id)
 
