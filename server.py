@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify, make_response
 from waitress import serve
 
 import config
-from course_vault_db import course_vault_db, ram_cache
+from course_vault_db import course_vault_db, ram_cache, now_ist_str, drive_image_url
 from course_scanner import course_scanner
 
 app = Flask(__name__)
@@ -109,6 +109,100 @@ def api_cv_single_lecture(lecture_id):
     if not doc:
         return jsonify({"status": "not_found"}), 404
     return jsonify({"status": "success", "lecture": doc})
+
+
+# =========================================================
+# TERMUX WORKER QUEUE & UPLOAD COMPLETION APIs
+# =========================================================
+@app.route("/api/worker/heartbeat", methods=["POST"])
+@require_admin
+def api_worker_heartbeat():
+    primary = course_vault_db.get_primary_db()
+    if not primary:
+        return jsonify({"status": "error", "message": "No primary DB"}), 500
+    data = request.get_json(silent=True) or {}
+    primary["db"].worker_status.update_one(
+        {"_id": "termux_archiver"},
+        {"$set": {
+            "status": str(data.get("status") or "ONLINE"),
+            "current_task": str(data.get("current_task") or "Idle / Watching Queue"),
+            "progress": int(data.get("progress") or 0),
+            "updated_at": now_ist_str(),
+            "ts": int(time.time())
+        }},
+        upsert=True
+    )
+    return jsonify({"status": "success"})
+
+
+@app.route("/api/worker/next", methods=["GET"])
+@require_admin
+def api_worker_next():
+    for entry in course_vault_db.dbs:
+        try:
+            doc = entry["db"].lectures.find_one_and_update(
+                {"status": "pending"},
+                {"$set": {"status": "processing", "updated_at": now_ist_str()}},
+                sort=[("ts", 1)],
+                return_document=True
+            )
+            if doc:
+                doc["_id"] = str(doc["_id"])
+                return jsonify({"status": "success", "job": doc})
+        except Exception:
+            continue
+    return jsonify({"status": "empty", "job": None})
+
+
+@app.route("/api/worker/complete", methods=["POST"])
+@require_admin
+def api_worker_complete():
+    data = request.get_json(silent=True) or {}
+    lid = str(data.get("lecture_id") or "").strip()
+    if not lid:
+        return jsonify({"status": "error", "message": "Missing lecture_id"}), 400
+    shard = course_vault_db._find_lecture_shard(lid)
+    if not shard:
+        return jsonify({"status": "error", "message": "Lecture not found"}), 404
+
+    upd = {
+        "status": "completed",
+        "error_message": "",
+        "updated_at": now_ist_str()
+    }
+    if data.get("yt_video_id"):
+        upd["yt_video_id"] = str(data["yt_video_id"]).strip()
+    if data.get("drive_pdf1_id"):
+        upd["drive_pdf1_id"] = str(data["drive_pdf1_id"]).strip()
+    if data.get("drive_pdf2_id"):
+        upd["drive_pdf2_id"] = str(data["drive_pdf2_id"]).strip()
+    if data.get("drive_thumb_id"):
+        upd["drive_thumb_id"] = str(data["drive_thumb_id"]).strip()
+        upd["drive_thumb_url"] = drive_image_url(data["drive_thumb_id"])
+
+    shard["db"].lectures.update_one({"lecture_id": lid}, {"$set": upd})
+    ram_cache.invalidate_prefix("cv_")
+    return jsonify({"status": "success"})
+
+
+@app.route("/api/worker/fail", methods=["POST"])
+@require_admin
+def api_worker_fail():
+    data = request.get_json(silent=True) or {}
+    lid = str(data.get("lecture_id") or "").strip()
+    err_msg = str(data.get("error_message") or "Upload/Download failed").strip()[:300]
+    if not lid:
+        return jsonify({"status": "error", "message": "Missing lecture_id"}), 400
+    shard = course_vault_db._find_lecture_shard(lid)
+    if not shard:
+        return jsonify({"status": "error", "message": "Lecture not found"}), 404
+
+    shard["db"].lectures.update_one(
+        {"lecture_id": lid},
+        {"$set": {"status": "failed", "error_message": err_msg, "updated_at": now_ist_str()}, "$inc": {"retry_count": 1}}
+    )
+    ram_cache.invalidate_prefix("cv_")
+    return jsonify({"status": "success"})
 
 
 # =========================================================
