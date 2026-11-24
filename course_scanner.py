@@ -18,6 +18,8 @@ RWA_HEADERS = {
     "Client-Service": "Appx",
     "Auth-Key": "appxapi",
     "source": "website",
+    "Device-Type": "",
+    "is-safari": "0",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"
 }
 
@@ -28,6 +30,23 @@ def _now_ist():
 
 def _now_ist_str():
     return _now_ist().strftime("%d-%m-%Y %I:%M:%S %p")
+
+
+def _extract_uid_from_jwt(token):
+    try:
+        parts = str(token or "").strip().split(".")
+        if len(parts) < 2:
+            return ""
+        b64 = parts[1].replace("-", "+").replace("_", "/")
+        b64 += "=" * ((4 - len(b64) % 4) % 4)
+        import json
+        payload = json.loads(base64.b64decode(b64).decode("utf-8", errors="ignore"))
+        for k in ("id", "userid", "user_id"):
+            if payload.get(k):
+                return str(payload[k])
+    except Exception:
+        pass
+    return ""
 
 
 def decrypt_appx_str(enc_str):
@@ -63,7 +82,6 @@ def resolve_pdf_url(enc_pdf, signed_pdf=""):
 
 
 def pick_best_video_url(item):
-    """Extracts the cleanest HLS (.m3u8) or MP4 URL from a lecture object."""
     candidates = []
     for key in ("encrypted_links", "livestream_links", "download_links"):
         arr = item.get(key) or []
@@ -90,13 +108,23 @@ def pick_best_video_url(item):
         if dec_file.startswith("http") and "playlist_eof.m3u8" not in dec_file:
             candidates.append((25, dec_file))
         elif not dec_file.startswith("http") and 10 <= len(dec_file) <= 15:
-            # Already a YouTube video ID
             candidates.append((10, dec_file))
 
     if not candidates:
         return ""
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0][1]
+
+
+def _extract_list(payload):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for k in ("data", "courses", "subjects", "topics", "lectures", "items"):
+            v = payload.get(k)
+            if isinstance(v, list):
+                return v
+    return []
 
 
 class CourseMetadataScanner:
@@ -110,7 +138,7 @@ class CourseMetadataScanner:
     def _make_idle_state(self):
         return {
             "running": False,
-            "status": "IDLE",  # IDLE | RUNNING | PAUSED_STORAGE_FULL | STOPPED | COMPLETED
+            "status": "IDLE",
             "mode": "none",
             "started_at": "",
             "finished_at": "",
@@ -187,28 +215,34 @@ class CourseMetadataScanner:
         return False
 
     def _fetch_rwa(self, endpoint, token, uid):
-        url = f"{config.RWA_API_BASE}{endpoint}"
-        headers = {**RWA_HEADERS, "Authorization": token, "User-ID": str(uid)}
-        try:
-            r = requests.get(url, headers=headers, timeout=14)
-            if r.ok:
-                return r.json()
-        except Exception:
-            pass
+        clean_uid = str(uid or "").strip() or _extract_uid_from_jwt(token) or "4756316"
+        clean_tok = str(token or "").strip()
+        url = f"{config.RWA_API_BASE.rstrip('/')}{endpoint}"
+        headers = {**RWA_HEADERS, "Authorization": clean_tok, "User-ID": clean_uid}
 
-        try:
-            base_enc = quote(config.RWA_API_BASE + "/", safe="")
-            cookie_str = f"base_url={base_enc}; Authorization={token}; User-ID={uid}"
-            wurl = (
-                f"{config.WORKER_PROXY_URL}{quote(url, safe='')}"
-                f"&cookie={quote(cookie_str, safe='')}&token={quote(token, safe='')}"
-                f"&uid={quote(str(uid), safe='')}&base_url={base_enc}"
-            )
-            r = requests.get(wurl, timeout=16)
-            if r.ok:
-                return r.json()
-        except Exception:
-            pass
+        for attempt in range(2):
+            try:
+                r = requests.get(url, headers=headers, timeout=15)
+                if r.ok:
+                    return r.json()
+            except Exception:
+                pass
+            time.sleep(0.25 * (attempt + 1))
+
+        if config.WORKER_PROXY_URL:
+            try:
+                base_enc = quote(config.RWA_API_BASE.rstrip("/") + "/", safe="")
+                cookie_str = f"base_url={base_enc}; Authorization={clean_tok}; User-ID={clean_uid}"
+                wurl = (
+                    f"{config.WORKER_PROXY_URL}{quote(url, safe='')}"
+                    f"&cookie={quote(cookie_str, safe='')}&token={quote(clean_tok, safe='')}"
+                    f"&uid={quote(clean_uid, safe='')}&base_url={base_enc}"
+                )
+                r = requests.get(wurl, timeout=18)
+                if r.ok:
+                    return r.json()
+            except Exception:
+                pass
         return None
 
     def _worker(self, mode, tokens):
@@ -216,29 +250,29 @@ class CourseMetadataScanner:
         try:
             self._log(f"Started {mode.upper()} Course Scan using {len(tokens)} token(s)...")
 
-            # 1. Discover all unique courses across all configured scanner tokens
             courses = []
             seen_cids = set()
             for tk in tokens:
                 if self._should_stop(mode):
                     break
-                uid, tok = tk["user_id"], tk["token"]
+                uid = str(tk.get("user_id") or "").strip() or _extract_uid_from_jwt(tk.get("token"))
+                tok = str(tk.get("token") or "").strip()
                 for ep in (f"/get/mycourseweb?userid={uid}", f"/get/mycourse?userid={uid}"):
                     j = self._fetch_rwa(ep, tok, uid)
-                    arr = (j.get("data") if isinstance(j, dict) else None) or []
-                    if isinstance(arr, list):
-                        for c in arr:
-                            cid = str(c.get("id") or c.get("course_id") or "").strip()
-                            if cid and cid not in seen_cids:
-                                seen_cids.add(cid)
-                                courses.append((c, tk))
-                                course_vault_db.upsert_course(c)
+                    arr = _extract_list(j)
+                    for c in arr:
+                        if not isinstance(c, dict):
+                            continue
+                        cid = str(c.get("id") or c.get("course_id") or "").strip()
+                        if cid and cid not in seen_cids:
+                            seen_cids.add(cid)
+                            courses.append((c, {**tk, "user_id": uid, "token": tok}))
+                            course_vault_db.upsert_course(c)
 
             with self._lock:
                 self.state["courses_total"] = len(courses)
             self._log(f"Found {len(courses)} unique Batch(es). Scanning subjects, topics & lectures...")
 
-            # 2. Traverse Course -> Subject -> Topic -> Lectures
             for c_idx, (c_obj, tk) in enumerate(courses, start=1):
                 if self._should_stop(mode) or storage_full_hit:
                     break
@@ -253,13 +287,13 @@ class CourseMetadataScanner:
                     self.state["progress_percent"] = int(((c_idx - 1) / max(1, len(courses))) * 100)
 
                 s_json = self._fetch_rwa(f"/get/allsubjectfrmlivecourseclass?courseid={cid}&start=-1", tok, uid)
-                subjects = (s_json.get("data") if isinstance(s_json, dict) else None) or []
-                if not isinstance(subjects, list):
-                    continue
+                subjects = _extract_list(s_json)
 
                 for sub in subjects:
                     if self._should_stop(mode) or storage_full_hit:
                         break
+                    if not isinstance(sub, dict):
+                        continue
                     sid = str(sub.get("subjectid") or sub.get("subject_id") or "").strip()
                     sname = str(sub.get("subject_name") or sub.get("subjectname") or f"Subject #{sid}").strip()
                     if not sid:
@@ -272,13 +306,13 @@ class CourseMetadataScanner:
                     t_json = self._fetch_rwa(
                         f"/get/alltopicfrmlivecourseclass?courseid={cid}&subjectid={sid}&start=-1", tok, uid
                     )
-                    topics = (t_json.get("data") if isinstance(t_json, dict) else None) or []
-                    if not isinstance(topics, list):
-                        continue
+                    topics = _extract_list(t_json)
 
                     for top in topics:
                         if self._should_stop(mode) or storage_full_hit:
                             break
+                        if not isinstance(top, dict):
+                            continue
                         tid = str(top.get("topicid") or top.get("topic_id") or "").strip()
                         tname = str(top.get("topic_name") or top.get("topicname") or f"Topic #{tid}").strip()
                         if not tid:
@@ -291,18 +325,17 @@ class CourseMetadataScanner:
                             f"/get/livecourseclassbycoursesubtopconceptapiv3?courseid={cid}&subjectid={sid}&topicid={tid}&conceptid=1&start=0",
                             tok, uid
                         )
-                        lectures = (l_json.get("data") if isinstance(l_json, dict) else None) or []
-                        if not isinstance(lectures, list):
-                            continue
+                        lectures = _extract_list(l_json)
 
                         for lec in lectures:
                             if self._should_stop(mode):
                                 break
-                            lid = str(lec.get("id") or "").strip()
+                            if not isinstance(lec, dict):
+                                continue
+                            lid = str(lec.get("id") or lec.get("lecture_id") or "").strip()
                             if not lid:
                                 continue
 
-                            # Fetch detailed video/PDF links if missing from list item
                             vid_url = pick_best_video_url(lec)
                             pdf1 = resolve_pdf_url(lec.get("pdf_link") or lec.get("ypdf_link"), lec.get("ypdf_link2"))
                             pdf2 = resolve_pdf_url(lec.get("pdf_link2"), lec.get("ypdf_link2"))
@@ -323,6 +356,7 @@ class CourseMetadataScanner:
                                 cid, cname, sid, sname, tid, tname,
                                 {
                                     **lec,
+                                    "id": lid,
                                     "source_video_url": vid_url,
                                     "source_pdf1_url": pdf1,
                                     "source_pdf2_url": pdf2
