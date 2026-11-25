@@ -27,9 +27,6 @@ def drive_image_url(file_id):
     return f"https://lh3.googleusercontent.com/d/{fid}=w1000"
 
 
-# =========================================================
-# THREAD-SAFE RAM TTL CACHE (HIGH-TRAFFIC ANTI-CRASH)
-# =========================================================
 class RamTTLCache:
     def __init__(self, max_items=1000):
         self._store = {}
@@ -84,9 +81,6 @@ class RamTTLCache:
 ram_cache = RamTTLCache()
 
 
-# =========================================================
-# UNLIMITED DEDICATED COURSE VAULT MONGODB MANAGER (450 MB CAP)
-# =========================================================
 class CourseVaultDB:
     def __init__(self):
         self.dbs = []
@@ -164,14 +158,10 @@ class CourseVaultDB:
                 continue
         return None
 
-    # ---------------------------------------------------------
-    # SCANNER TOKENS POOL (STORED IN PRIMARY COURSE DB)
-    # ---------------------------------------------------------
     def get_scanner_tokens(self):
         tokens = []
         seen = set()
 
-        # 1. From Render Environment Variable SCANNER_TOKENS
         if config.SCANNER_TOKENS_RAW:
             for part in config.SCANNER_TOKENS_RAW.replace("\n", ",").split(","):
                 p = part.strip()
@@ -182,7 +172,6 @@ class CourseVaultDB:
                         seen.add(tok)
                         tokens.append({"user_id": uid, "token": tok, "source": "env"})
 
-        # 2. From MongoDB scanner_tokens collection
         primary = self.get_primary_db()
         if primary:
             try:
@@ -227,9 +216,6 @@ class CourseVaultDB:
             return False
         return primary["db"].scanner_tokens.delete_one({"user_id": str(user_id).strip()}).deleted_count > 0
 
-    # ---------------------------------------------------------
-    # 1. COURSES / BATCHES (WITH GOOGLE DRIVE THUMBNAIL BACKUP)
-    # ---------------------------------------------------------
     def upsert_course(self, course_obj):
         primary = self.get_primary_db()
         cid = str(course_obj.get("id") or course_obj.get("course_id") or "").strip()
@@ -253,7 +239,7 @@ class CourseVaultDB:
             "drive_thumb_id": "",
             "drive_thumb_url": "",
             "thumb_status": "pending" if raw_logo.startswith("http") else "none",
-            "playback_mode": "vault_first",  # "vault_first" | "hls_live"
+            "playback_mode": "vault_first",
             "first_saved_at": now_str
         }
         primary["db"].courses.update_one(
@@ -265,6 +251,26 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix("cv_summary")
         return True
 
+    def delete_course(self, course_id):
+        cid = str(course_id or "").strip()
+        if not cid:
+            return False
+        primary = self.get_primary_db()
+        if primary:
+            try:
+                primary["db"].courses.delete_many({"course_id": cid})
+                primary["db"].subjects.delete_many({"course_id": cid})
+                primary["db"].topics.delete_many({"course_id": cid})
+            except Exception:
+                pass
+        for entry in self.dbs:
+            try:
+                entry["db"].lectures.delete_many({"course_id": cid})
+            except Exception:
+                continue
+        ram_cache.invalidate_prefix("cv_")
+        return True
+
     def get_all_courses(self):
         cached = ram_cache.get("cv_courses:all")
         if cached is not None:
@@ -274,7 +280,6 @@ class CourseVaultDB:
             return []
         docs = [_clean_doc(d) for d in primary["db"].courses.find().sort("ts", DESCENDING)]
 
-        # Aggregate lecture counts across all shards
         total_map, ready_map, pending_map = {}, {}, {}
         for entry in self.dbs:
             try:
@@ -293,7 +298,6 @@ class CourseVaultDB:
             d["total_lectures"] = total_map.get(cid, 0)
             d["yt_ready_lectures"] = ready_map.get(cid, 0)
             d["pending_lectures"] = pending_map.get(cid, 0)
-            # Prefer Google Drive Thumbnail if uploaded!
             d["exam_logo"] = d.get("drive_thumb_url") or d.get("source_logo") or ""
 
         ram_cache.set("cv_courses:all", docs, ttl_sec=45)
@@ -310,9 +314,6 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix("cv_courses")
         return res.matched_count > 0
 
-    # ---------------------------------------------------------
-    # 2. SUBJECTS (WITH GOOGLE DRIVE LOGO BACKUP)
-    # ---------------------------------------------------------
     def upsert_subject(self, course_id, sub_obj):
         primary = self.get_primary_db()
         cid = str(course_id or "").strip()
@@ -360,9 +361,6 @@ class CourseVaultDB:
         ram_cache.set(f"cv_subjects:{cid}", docs, ttl_sec=60)
         return docs
 
-    # ---------------------------------------------------------
-    # 3. TOPICS (ZERO DUPLICATES)
-    # ---------------------------------------------------------
     def upsert_topic(self, course_id, subject_id, top_obj):
         primary = self.get_primary_db()
         cid = str(course_id or "").strip()
@@ -403,9 +401,6 @@ class CourseVaultDB:
         ram_cache.set(key, docs, ttl_sec=60)
         return docs
 
-    # ---------------------------------------------------------
-    # 4. LECTURES (AUTO-SHARDED, ZERO DUPLICATES, YT + DRIVE PDF + DRIVE THUMB)
-    # ---------------------------------------------------------
     def upsert_lecture_metadata(self, course_id, course_name, subject_id, subject_name, topic_id, topic_name, lec_obj):
         lid = str(lec_obj.get("id") or lec_obj.get("lecture_id") or "").strip()
         if not lid:
@@ -443,7 +438,7 @@ class CourseVaultDB:
             "updated_at": now_str
         }
         on_insert = {
-            "status": "pending",  # pending | processing | completed | failed
+            "status": "pending",
             "yt_video_id": "",
             "drive_pdf1_id": "",
             "drive_pdf2_id": "",
@@ -464,6 +459,55 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix(f"cv_lec:{lid}")
         ram_cache.invalidate_prefix("cv_summary")
         return {"ok": True, "is_new": is_new, "shard": target_shard["label"]}
+
+    # Sequential 1-by-1 Link Feeder for Termux (no next link until current completes)
+    def claim_next_lecture_one_by_one(self):
+        for entry in self.dbs:
+            try:
+                busy = entry["db"].lectures.find_one({"status": "processing"})
+                if busy:
+                    return None
+            except Exception:
+                continue
+
+        for entry in self.dbs:
+            try:
+                doc = entry["db"].lectures.find_one_and_update(
+                    {"status": "pending"},
+                    {"$set": {"status": "processing", "updated_at": now_ist_str()}},
+                    sort=[("ts", 1)],
+                    return_document=True
+                )
+                if doc:
+                    ram_cache.invalidate_prefix("cv_summary")
+                    return _clean_doc(doc)
+            except Exception:
+                continue
+        return None
+
+    def finish_lecture_item(self, lecture_id, ok=True, yt_video_id="", drive_pdf1_id="", drive_pdf2_id="", drive_thumb_id="", error_message=""):
+        lid = str(lecture_id or "").strip()
+        shard = self._find_lecture_shard(lid)
+        if not shard:
+            return False
+        upd = {
+            "status": "completed" if ok else "failed",
+            "error_message": "" if ok else str(error_message or "Download/Upload failed")[:200],
+            "updated_at": now_ist_str()
+        }
+        if yt_video_id:
+            upd["yt_video_id"] = str(yt_video_id).strip()
+        if drive_pdf1_id:
+            upd["drive_pdf1_id"] = str(drive_pdf1_id).strip()
+        if drive_pdf2_id:
+            upd["drive_pdf2_id"] = str(drive_pdf2_id).strip()
+        if drive_thumb_id:
+            upd["drive_thumb_id"] = str(drive_thumb_id).strip()
+            upd["drive_thumb_url"] = drive_image_url(drive_thumb_id)
+
+        shard["db"].lectures.update_one({"lecture_id": lid}, {"$set": upd})
+        ram_cache.invalidate_prefix("cv_")
+        return True
 
     def get_topic_lectures(self, course_id, subject_id, topic_id):
         cid, sid, tid = str(course_id), str(subject_id), str(topic_id)
@@ -547,9 +591,6 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix("cv_")
         return count
 
-    # ---------------------------------------------------------
-    # 5. TERMUX WORKER LIVE HEARTBEAT & DIRECT SUMMARY
-    # ---------------------------------------------------------
     def get_worker_heartbeat(self):
         primary = self.get_primary_db()
         if not primary:
