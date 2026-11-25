@@ -102,6 +102,27 @@ def api_cv_single_lecture(lecture_id):
     return jsonify({"status": "success", "lecture": doc})
 
 
+@app.route("/api/worker/next_lecture", methods=["GET"])
+def api_worker_next_lecture():
+    doc = course_vault_db.claim_next_lecture_one_by_one()
+    return jsonify({"status": "success", "lecture": doc}), 200
+
+
+@app.route("/api/worker/report_lecture", methods=["POST"])
+def api_worker_report_lecture():
+    data = request.get_json(silent=True) or {}
+    ok = course_vault_db.finish_lecture_item(
+        lecture_id=data.get("lecture_id", ""),
+        ok=bool(data.get("ok", False)),
+        yt_video_id=data.get("yt_video_id", ""),
+        drive_pdf1_id=data.get("drive_pdf1_id", ""),
+        drive_pdf2_id=data.get("drive_pdf2_id", ""),
+        drive_thumb_id=data.get("drive_thumb_id", ""),
+        error_message=data.get("error_message", "")
+    )
+    return jsonify({"status": "success" if ok else "error"}), 200
+
+
 @app.route("/api/admin/auth", methods=["POST"])
 def api_admin_auth():
     data = request.get_json(silent=True) or {}
@@ -143,6 +164,15 @@ def api_admin_token_verify():
         "courses": res.get("courses", []),
         "message": res.get("message", "Token Verified!")
     })
+
+
+@app.route("/api/admin/course/delete", methods=["POST", "DELETE"])
+@require_admin
+def api_admin_course_delete():
+    data = request.get_json(silent=True) or {}
+    cid = str(data.get("course_id") or request.args.get("course_id") or "").strip()
+    ok = course_vault_db.delete_course(cid)
+    return jsonify({"status": "success" if ok else "error", "deleted_course_id": cid})
 
 
 @app.route("/api/admin/scan/start", methods=["POST"])
