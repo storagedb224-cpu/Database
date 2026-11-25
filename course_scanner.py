@@ -14,6 +14,8 @@ from course_vault_db import course_vault_db
 
 IST = timezone(timedelta(hours=5, minutes=30))
 APPX_AES_KEY = b"638udh3829162018"
+WEB_STREAM_PROXY = "https://proplayer.allswbatch22.workers.dev/stream?url="
+WEB_SEGMENT_PROXY = "https://proplayer.allswbatch22.workers.dev/proxy?url="
 
 RWA_HEADERS = {
     "Client-Service": "Appx",
@@ -95,6 +97,17 @@ def resolve_pdf_url(enc_pdf, signed_pdf=""):
     if signed_pdf and str(signed_pdf).startswith("http"):
         return str(signed_pdf).replace("\\/", "/").strip()
     return dec or ""
+
+
+def wrap_with_website_proxy(raw_url):
+    u = str(raw_url or "").strip()
+    if not u:
+        return ""
+    if "proplayer.allswbatch22.workers.dev" in u:
+        return u
+    if ".m3u8" in u.lower() or "classx.co.in" in u.lower() or "akamai.net.in" in u.lower():
+        return WEB_STREAM_PROXY + quote(u, safe="")
+    return WEB_SEGMENT_PROXY + quote(u, safe="")
 
 
 def pick_best_video_url(item):
@@ -231,7 +244,6 @@ class CourseMetadataScanner:
         if not uid:
             return {"ok": False, "message": "Token se User-ID nahi nikla. Sahi JWT token paste karein."}
 
-        # 1. Verify token with user profile endpoint
         user_name = f"User #{uid}"
         prof = self._fetch_rwa(f"/get/get_user_dt?userid={uid}", tok, uid)
         token_verified = False
@@ -244,7 +256,6 @@ class CourseMetadataScanner:
                 user_name = str(pdata.get("name") or user_name).strip()
                 token_verified = True
 
-        # 2. Fetch purchased courses
         courses = []
         seen = set()
         last_msg = ""
@@ -325,11 +336,13 @@ class CourseMetadataScanner:
 
     def stop_scan(self):
         with self._lock:
-            if not self.state["running"]:
-                return False, "Koi scan abhi nahi chal raha."
             self._stop_flag = True
-            self.state["current_phase"] = "Stopping cleanly..."
+            if self.state["running"]:
+                self.state["current_phase"] = "Stopping process immediately..."
             return True, "Stop signal sent."
+
+    def is_stopped(self):
+        return bool(self._stop_flag)
 
     def _should_stop(self, mode):
         if self._stop_flag:
@@ -338,10 +351,26 @@ class CourseMetadataScanner:
             return True
         return False
 
+    def _wait_until_previous_lecture_finishes(self, mode):
+        """Ensures next lecture link is extracted/queued only after previous lecture finishes."""
+        while not self._should_stop(mode):
+            busy = False
+            for entry in course_vault_db.dbs:
+                try:
+                    if entry["db"].lectures.find_one({"status": "processing"}, {"_id": 1}):
+                        busy = True
+                        break
+                except Exception:
+                    continue
+            if not busy:
+                return True
+            time.sleep(2)
+        return False
+
     def _worker(self, mode, tokens, target_course_id=""):
         storage_full_hit = False
         try:
-            self._log(f"Started {mode.upper()} Scan (target={target_course_id or 'ALL'}) with {len(tokens)} token(s)...")
+            self._log(f"Started {mode.upper()} Scan (target={target_course_id or 'ALL'})...")
             courses = []
             seen_cids = set()
 
@@ -380,9 +409,9 @@ class CourseMetadataScanner:
                 with self._lock:
                     self.state["running"] = False
                     self.state["finished_at"] = _now_ist_str()
-                    self.state["status"] = "COMPLETED"
+                    self.state["status"] = "STOPPED" if self._stop_flag else "COMPLETED"
                     self.state["progress_percent"] = 100
-                    self.state["current_phase"] = "0 batches found — Token verify karein."
+                    self.state["current_phase"] = "Stopped" if self._stop_flag else "0 batches found."
                 return
 
             for c_idx, (c_obj, tk) in enumerate(courses, start=1):
@@ -402,7 +431,7 @@ class CourseMetadataScanner:
                 subjects = (s_json.get("data") if isinstance(s_json, dict) else None) or []
                 if not isinstance(subjects, list):
                     continue
-                self._log(f"Batch #{cid} ({cname}) -> {len(subjects)} subject(s)")
+                self._log(f"Batch #{cid} ({cname}) -> {len(subjects)} folder(s)/subject(s)")
 
                 for sub in subjects:
                     if self._should_stop(mode) or storage_full_hit:
@@ -445,33 +474,39 @@ class CourseMetadataScanner:
                         for lec in lectures:
                             if self._should_stop(mode):
                                 break
+                            if not self._wait_until_previous_lecture_finishes(mode):
+                                break
+
                             lid = str(lec.get("id") or "").strip()
                             if not lid:
                                 continue
 
-                            vid_url = pick_best_video_url(lec)
-                            pdf1 = resolve_pdf_url(lec.get("pdf_link") or lec.get("ypdf_link"), lec.get("ypdf_link2"))
-                            pdf2 = resolve_pdf_url(lec.get("pdf_link2"), lec.get("ypdf_link2"))
+                            raw_vid = pick_best_video_url(lec)
+                            raw_pdf1 = resolve_pdf_url(lec.get("pdf_link") or lec.get("ypdf_link"), lec.get("ypdf_link2"))
+                            raw_pdf2 = resolve_pdf_url(lec.get("pdf_link2"), lec.get("ypdf_link2"))
 
-                            if not vid_url and not course_vault_db._find_lecture_shard(lid):
+                            if not raw_vid and not course_vault_db._find_lecture_shard(lid):
                                 det = self._fetch_rwa(
                                     f"/get/fetchVideoDetailsById?course_id={cid}&video_id={lid}&ytflag=0&folder_wise_course=0&lc_app_api_url=",
                                     tok, uid
                                 )
                                 d_obj = (det.get("data") if isinstance(det, dict) else None) or {}
                                 if isinstance(d_obj, dict):
-                                    vid_url = pick_best_video_url(d_obj) or vid_url
-                                    pdf1 = pdf1 or resolve_pdf_url(d_obj.get("pdf_link") or d_obj.get("ypdf_link"), d_obj.get("ypdf_link2"))
-                                    pdf2 = pdf2 or resolve_pdf_url(d_obj.get("pdf_link2"), d_obj.get("ypdf_link2"))
-                                time.sleep(0.12)
+                                    raw_vid = pick_best_video_url(d_obj) or raw_vid
+                                    raw_pdf1 = raw_pdf1 or resolve_pdf_url(d_obj.get("pdf_link") or d_obj.get("ypdf_link"), d_obj.get("ypdf_link2"))
+                                    raw_pdf2 = raw_pdf2 or resolve_pdf_url(d_obj.get("pdf_link2"), d_obj.get("ypdf_link2"))
+
+                            proxied_vid = wrap_with_website_proxy(raw_vid) if raw_vid.startswith("http") else raw_vid
+                            proxied_pdf1 = wrap_with_website_proxy(raw_pdf1) if raw_pdf1.startswith("http") else raw_pdf1
+                            proxied_pdf2 = wrap_with_website_proxy(raw_pdf2) if raw_pdf2.startswith("http") else raw_pdf2
 
                             res = course_vault_db.upsert_lecture_metadata(
                                 cid, cname, sid, sname, tid, tname,
                                 {
                                     **lec,
-                                    "source_video_url": vid_url,
-                                    "source_pdf1_url": pdf1,
-                                    "source_pdf2_url": pdf2
+                                    "source_video_url": proxied_vid,
+                                    "source_pdf1_url": proxied_pdf1,
+                                    "source_pdf2_url": proxied_pdf2
                                 }
                             )
                             if res.get("storage_full"):
@@ -484,8 +519,7 @@ class CourseMetadataScanner:
                                         self.state["new_lectures_queued"] += 1
                                     else:
                                         self.state["existing_skipped"] += 1
-
-                        time.sleep(0.12)
+                                self._log(f"1-by-1 Link Queued: Class #{lid} ({str(lec.get('Title') or '')[:35]})")
 
                 with self._lock:
                     self.state["courses_done"] = c_idx
@@ -497,24 +531,16 @@ class CourseMetadataScanner:
                 if storage_full_hit:
                     self.state["status"] = "PAUSED_STORAGE_FULL"
                     self.state["current_phase"] = f"Paused: All Course DBs hit {config.MAX_COURSE_DB_SIZE_MB} MB limit!"
-                    self._log("🛑 Storage Full (450 MB). Add new COURSE_MONGO_URI_N.")
                 elif self._stop_flag:
                     self.state["status"] = "STOPPED"
-                    self.state["current_phase"] = "Stopped by Admin"
-                    self._log("⏹ Scan stopped by Admin.")
+                    self.state["current_phase"] = "Process Stopped by Admin"
+                    self._log("⏹ Scan process stopped by Admin.")
                 else:
                     self.state["status"] = "COMPLETED"
                     self.state["progress_percent"] = 100
                     nq = self.state["new_lectures_queued"]
-                    self.state["current_phase"] = f"Done! {nq} new class(es) queued for Termux upload."
+                    self.state["current_phase"] = f"Done! {nq} new class(es) queued."
                     self._log(f"✅ Complete: {nq} new queued, {self.state['existing_skipped']} skipped.")
-                    if nq > 0:
-                        self._notify(
-                            f"🎓 <b>Course Vault Scan Complete</b>\n"
-                            f"• Batches: <b>{len(courses)}</b>\n"
-                            f"• New Classes Queued for Termux: <b>{nq}</b>\n"
-                            f"• Skipped: <b>{self.state['existing_skipped']}</b>"
-                        )
         except Exception as e:
             with self._lock:
                 self.state["running"] = False
