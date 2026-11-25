@@ -6,7 +6,6 @@
 // =========================================================
 
 const BOT_API_BASE = "https://pdfsownlaoder.onrender.com";
-// 👇 APNE NAYE RENDER COURSE VAULT SERVICE KA URL YAHAN DALEIN:
 const COURSE_VAULT_API_BASE = "https://database-1wsm.onrender.com";
 
 const API_BASE = "https://rozgarapinew.teachx.in";
@@ -15,10 +14,10 @@ window.WORKER_RAW_PROXY = "https://proplayer.allswbatch22.workers.dev/proxy?url=
 const RWA_DEDICATED_WORKER = "https://test.src22420.workers.dev/?url=";
 
 const CACHE_KEYS = {
-    PAID_BATCHES: "rwa_cache_paid_batches_v5",
-    FREE_BATCHES: "rwa_cache_free_batches_v5",
-    PAID_TS: "rwa_cache_paid_ts_v5",
-    FREE_TS: "rwa_cache_free_ts_v5"
+    PAID_BATCHES: "rwa_cache_paid_batches_v6",
+    FREE_BATCHES: "rwa_cache_free_batches_v6",
+    PAID_TS: "rwa_cache_paid_ts_v6",
+    FREE_TS: "rwa_cache_free_ts_v6"
 };
 
 const RWA_CORS_SAFE_HEADERS = {
@@ -33,19 +32,21 @@ window.ACTIVE_CHALLENGE = null;
 // HYBRID COURSE VAULT READ-ONLY FETCHERS (ZERO CRASH)
 // =====================================================
 function isCourseVaultConfigured() {
-    return Boolean(COURSE_VAULT_API_BASE && !COURSE_VAULT_API_BASE.includes("your-course-vault"));
+    return Boolean(COURSE_VAULT_API_BASE && COURSE_VAULT_API_BASE.startsWith("http") && !COURSE_VAULT_API_BASE.includes("your-course-vault"));
 }
 
 async function fetchCvJson(path) {
     if (!isCourseVaultConfigured()) return null;
     try {
         const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 7000);
+        const tid = setTimeout(() => ctrl.abort(), 8000);
         const res = await fetch(`${COURSE_VAULT_API_BASE.replace(/\/$/, "")}${path}`, { signal: ctrl.signal });
         clearTimeout(tid);
         if (!res.ok) return null;
         return await res.json();
-    } catch { return null; }
+    } catch {
+        return null;
+    }
 }
 
 async function fetchCourseVaultCourses() {
@@ -78,9 +79,13 @@ function decodeJwtPayloadObject(jwtStr) {
         const parts = jwtStr.trim().split(".");
         if (parts.length < 2) return null;
         const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-        const jsonPayload = decodeURIComponent(atob(base64).split("").map(c => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2)).join(""));
+        const jsonPayload = decodeURIComponent(
+            atob(base64).split("").map(c => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2)).join("")
+        );
         return JSON.parse(jsonPayload);
-    } catch { return null; }
+    } catch {
+        return null;
+    }
 }
 
 function extractUidFromJwt(jwtStr) {
@@ -190,7 +195,10 @@ async function getAllTokensForCourses() {
     const all = [...USER_TOKENS, ...dbTokens];
     const unique = [], seen = new Set();
     for (const t of all) {
-        if (t && t.token && !seen.has(t.token)) { seen.add(t.token); unique.push(t); }
+        if (t && t.token && !seen.has(t.token)) {
+            seen.add(t.token);
+            unique.push(t);
+        }
     }
     return unique;
 }
@@ -202,7 +210,9 @@ function getCourseBoundToken(courseId) {
     return USER_TOKENS[0];
 }
 
-function isUserLoggedIn() { return USER_TOKENS.length > 0 && Boolean(USER_TOKENS[0].token); }
+function isUserLoggedIn() {
+    return USER_TOKENS.length > 0 && Boolean(USER_TOKENS[0].token);
+}
 
 function updateTokenBadge() {
     const b = document.getElementById("tokCountBadge");
@@ -254,7 +264,10 @@ function openLoginModal() {
 }
 
 function closeLoginModal() {
-    if (!isUserLoggedIn()) { showLoginStatus("⚠️ Portal use karne ke liye Login karna COMPULSORY hai!", "error"); return; }
+    if (!isUserLoggedIn()) {
+        showLoginStatus("⚠️ Portal use karne ke liye Login karna COMPULSORY hai!", "error");
+        return;
+    }
     document.getElementById("loginModal")?.classList.add("hidden");
 }
 
@@ -308,7 +321,10 @@ async function callRwaAuthEndpoint(endpoint, method = "GET", formParams = null) 
         try {
             const headers = { ...RWA_CORS_SAFE_HEADERS, ...extra };
             const opts = { method, headers };
-            if (method === "POST" && formParams) { headers["Content-Type"] = "application/x-www-form-urlencoded"; opts.body = formParams.toString(); }
+            if (method === "POST" && formParams) {
+                headers["Content-Type"] = "application/x-www-form-urlencoded";
+                opts.body = formParams.toString();
+            }
             const res = await fetch(fullUrl, opts);
             if (res.ok) { const j = await res.json(); if (j) return j; }
         } catch {}
@@ -452,9 +468,12 @@ async function loginOnRwaServer(phoneOrEmail, password) {
     for (const ep of ["/post/userLogin", "/get/login", "/post/login"]) {
         try {
             const fd = new URLSearchParams();
-            fd.append("email", phoneOrEmail); fd.append("phone", phoneOrEmail);
-            fd.append("username", phoneOrEmail); fd.append("password", password);
-            fd.append("devicetoken", ""); fd.append("mydeviceid", "");
+            fd.append("email", phoneOrEmail);
+            fd.append("phone", phoneOrEmail);
+            fd.append("username", phoneOrEmail);
+            fd.append("password", password);
+            fd.append("devicetoken", "");
+            fd.append("mydeviceid", "");
             const res = await fetch(`${API_BASE}${ep}`, {
                 method: "POST",
                 headers: { ...RWA_CORS_SAFE_HEADERS, "Content-Type": "application/x-www-form-urlencoded" },
@@ -471,7 +490,8 @@ async function finalizeSkyLogin(token, uid, fallbackObj, methodLabel, rawPass) {
     let userDetails = await fetchUserDetailsFromServer(token, uid);
     if (!userDetails) {
         userDetails = {
-            id: uid, userid: uid,
+            id: uid,
+            userid: uid,
             name: (fallbackObj && fallbackObj.name) || `Student #${uid}`,
             email: (fallbackObj && fallbackObj.email) || "N/A",
             phone: (fallbackObj && fallbackObj.phone) || _skyLastOtpPhone || "N/A",
@@ -481,7 +501,13 @@ async function finalizeSkyLogin(token, uid, fallbackObj, methodLabel, rawPass) {
         };
     }
 
-    const userTokObj = { id: "utok_" + Date.now(), label: userDetails.name || `User #${uid}`, userId: String(uid), token, isAdmin: false };
+    const userTokObj = {
+        id: "utok_" + Date.now(),
+        label: userDetails.name || `User #${uid}`,
+        userId: String(uid),
+        token,
+        isAdmin: false
+    };
     USER_TOKENS = [userTokObj, ...USER_TOKENS.filter(t => t.userId !== userTokObj.userId)];
     USER_PROFILE = userDetails;
     window.USER_TOKENS = USER_TOKENS;
@@ -507,7 +533,11 @@ async function finalizeSkyLogin(token, uid, fallbackObj, methodLabel, rawPass) {
 
 window.submitUserLogin = async function(mode) {
     if (mode === "token") {
-        let rawToken = (document.getElementById("loginTokenInput")?.value || "").trim().replace(/^["']|["']$/g, "").replace(/^Authorization:\s*/i, "").trim();
+        let rawToken = (document.getElementById("loginTokenInput")?.value || "")
+            .trim()
+            .replace(/^["']|["']$/g, "")
+            .replace(/^Authorization:\s*/i, "")
+            .trim();
         if (!rawToken) return showLoginStatus("⚠️ Kripya apna JWT Token paste karein.", "error");
         const uid = extractUidFromJwt(rawToken);
         if (!uid) return showLoginStatus("❌ Invalid JWT Token format!", "error");
@@ -521,11 +551,18 @@ window.submitUserLogin = async function(mode) {
     const phone = document.getElementById("loginPhoneInput").value.trim();
     const pass = document.getElementById("loginPassInput").value.trim();
     if (!phone || !pass) return showLoginStatus("⚠️ Number/Email aur Password dono dalein.", "error");
-    if (pass.startsWith("eyJ")) { document.getElementById("loginTokenInput").value = pass; switchLoginMode("token"); submitUserLogin("token"); return; }
+    if (pass.startsWith("eyJ")) {
+        document.getElementById("loginTokenInput").value = pass;
+        switchLoginMode("token");
+        submitUserLogin("token");
+        return;
+    }
 
     showLoginStatus("🔄 Credentials verify ho rahe hain...", "info");
     const loginData = await loginOnRwaServer(phone, pass);
-    if (!loginData || !(loginData.token || loginData.jwt)) return showLoginStatus("❌ Login Failed! Number ya Password galat hai.", "error");
+    if (!loginData || !(loginData.token || loginData.jwt)) {
+        return showLoginStatus("❌ Login Failed! Number ya Password galat hai.", "error");
+    }
 
     const token = loginData.token || loginData.jwt;
     const uid = String(loginData.userid || loginData.id || extractUidFromJwt(token));
@@ -599,8 +636,10 @@ async function handleLogout(force = false) {
     ["rwa_user_tokens_v2", "rwa_user_profile_v2", "rwa_session_id_v1", "rwa_user_vip_badge"].forEach(k => localStorage.removeItem(k));
     document.cookie = "Authorization=; path=/; max-age=0";
     document.cookie = "User-ID=; path=/; max-age=0";
-    USER_TOKENS = []; USER_PROFILE = null;
-    window.USER_TOKENS = []; window.USER_PROFILE = null;
+    USER_TOKENS = [];
+    USER_PROFILE = null;
+    window.USER_TOKENS = [];
+    window.USER_PROFILE = null;
 
     closeProfileModal();
     document.getElementById("portalLockOverlay")?.classList.add("hidden");
@@ -617,11 +656,15 @@ function decryptAppX(encStr) {
     if (!encStr.includes(":")) return encStr.trim();
     try {
         const [cipherB64, ivB64] = encStr.split(":");
-        const cipherParams = CryptoJS.lib.CipherParams.create({ ciphertext: CryptoJS.enc.Base64.parse(cipherB64.replace(/\\\//g, "/")) });
+        const cipherParams = CryptoJS.lib.CipherParams.create({
+            ciphertext: CryptoJS.enc.Base64.parse(cipherB64.replace(/\\\//g, "/"))
+        });
         const iv = CryptoJS.enc.Base64.parse(ivB64);
         const dec = CryptoJS.AES.decrypt(cipherParams, AES_KEY, { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 });
         return dec.toString(CryptoJS.enc.Utf8).replace(/[\x00-\x1F\x7F]/g, "").trim();
-    } catch { return ""; }
+    } catch {
+        return "";
+    }
 }
 window.decryptAppX = decryptAppX;
 
@@ -653,12 +696,14 @@ async function checkIncomingChallengeUrl() {
         window.ACTIVE_CHALLENGE = ch;
         const banner = document.getElementById("incomingChallengeBanner");
         if (!banner) return;
+        const safeName = typeof escHtml === "function" ? escHtml(ch.challenger_name) : String(ch.challenger_name || "");
+        const safeTest = typeof escHtml === "function" ? escHtml(ch.test_title) : String(ch.test_title || "");
         banner.className = "max-w-6xl mx-auto sky-card p-4 border-2 border-amber-400 flex flex-wrap items-center justify-between gap-3";
         banner.innerHTML = `
             <div class="min-w-0 flex-1">
                 <span class="px-2.5 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-black">⚔️ 1-V-1 FRIEND CHALLENGE</span>
-                <div class="font-black text-sm mt-1 truncate">${escHtml(ch.challenger_name)} challenged you!</div>
-                <div class="text-xs font-bold opacity-80">Beat <strong>${ch.challenger_score}/${ch.max_marks}</strong> (${ch.challenger_accuracy}% Acc) in <strong>${escHtml(ch.test_title)}</strong></div>
+                <div class="font-black text-sm mt-1 truncate">${safeName} challenged you!</div>
+                <div class="text-xs font-bold opacity-80">Beat <strong>${ch.challenger_score}/${ch.max_marks}</strong> (${ch.challenger_accuracy}% Acc) in <strong>${safeTest}</strong></div>
             </div>
             <button onclick="acceptIncomingChallenge()" class="btn-watch text-xs shrink-0">⚔️ Accept & Start →</button>`;
         banner.classList.remove("hidden");
@@ -670,8 +715,12 @@ window.acceptIncomingChallenge = function() {
     if (!ch || !ch.test_id) return;
     const tKey = `test_${ch.test_id}`;
     state.testMap[tKey] = state.testMap[tKey] || {
-        id: String(ch.test_id), seriesId: String(ch.series_id || ""), test_series_id: String(ch.series_id || ""),
-        title: ch.test_title || `Challenge Test #${ch.test_id}`, marks: String(ch.max_marks || 100), time: "60",
+        id: String(ch.test_id),
+        seriesId: String(ch.series_id || ""),
+        test_series_id: String(ch.series_id || ""),
+        title: ch.test_title || `Challenge Test #${ch.test_id}`,
+        marks: String(ch.max_marks || 100),
+        time: "60",
         tokenObj: USER_TOKENS[0] || null
     };
     launchCbtTest(tKey);
@@ -719,12 +768,32 @@ const DB = {
 };
 
 let state = {
-    currentSlide: "slideHome", previousSlide: "slideHome", cat: "paid", view: "batches",
-    courseId: "571", courseName: "SSC GD भर्ती 2027", activeTokenObj: USER_TOKENS[0],
-    courseTokenMap: {}, courseTestSeriesMap: {}, courseModeMap: {}, subjectId: null, subjectName: "",
-    topicId: null, topicName: "", currentLectureKeys: [], lastRenderedLectures: [],
-    activeExplorerFilter: "all", mediaMap: {}, activeKey: null, currentPdfUrl: "", inlinePdfUrl: "",
-    tsMode: "paid_ts", activeSeriesId: null, activeSeriesTitle: "", activeTsSubId: null, activeTsSubName: "",
+    currentSlide: "slideHome",
+    previousSlide: "slideHome",
+    cat: "paid",
+    view: "batches",
+    courseId: "571",
+    courseName: "SSC GD भर्ती 2027",
+    activeTokenObj: USER_TOKENS[0],
+    courseTokenMap: {},
+    courseTestSeriesMap: {},
+    courseModeMap: {},
+    subjectId: null,
+    subjectName: "",
+    topicId: null,
+    topicName: "",
+    currentLectureKeys: [],
+    lastRenderedLectures: [],
+    activeExplorerFilter: "all",
+    mediaMap: {},
+    activeKey: null,
+    currentPdfUrl: "",
+    inlinePdfUrl: "",
+    tsMode: "paid_ts",
+    activeSeriesId: null,
+    activeSeriesTitle: "",
+    activeTsSubId: null,
+    activeTsSubName: "",
     testMap: {}
 };
 window.state = state;
@@ -774,7 +843,8 @@ function goHomeHub() {
 function openTokenSlide() { if (!enforceCompulsoryLogin()) return; renderTokenManagerList(); showSlide("slideTokens"); }
 function openExplorerSlide(cat) {
     if (!enforceCompulsoryLogin()) return;
-    state.cat = cat; showSlide("slideExplorer");
+    state.cat = cat;
+    showSlide("slideExplorer");
     if (cat === "paid") renderPaidBatches(false); else renderFreeBatches(false);
 }
 
@@ -810,14 +880,18 @@ async function fetchRawJSONWithToken(endpoint, tokenObj) {
     if (!useTok) return null;
     const resolvedUid = String(useTok.userId || extractUidFromJwt(useTok.token) || "4756316");
     try {
-        const res = await fetch(`${API_BASE}${endpoint}`, { headers: { ...RWA_CORS_SAFE_HEADERS, "Authorization": useTok.token, "User-ID": resolvedUid } });
+        const res = await fetch(`${API_BASE}${endpoint}`, {
+            headers: { ...RWA_CORS_SAFE_HEADERS, "Authorization": useTok.token, "User-ID": resolvedUid }
+        });
         const json = await res.json();
         if (statusBadge) statusBadge.textContent = "Live";
         return json;
     } catch {
         try {
             const cookieStr = `base_url=${encodeURIComponent(API_BASE + "/")}; Authorization=${useTok.token}; User-ID=${resolvedUid}`;
-            const wRes = await fetch(`${RWA_DEDICATED_WORKER}${encodeURIComponent(API_BASE + endpoint)}&cookie=${encodeURIComponent(cookieStr)}&token=${encodeURIComponent(useTok.token)}&uid=${encodeURIComponent(resolvedUid)}&base_url=${encodeURIComponent(API_BASE + "/")}`);
+            const wRes = await fetch(
+                `${RWA_DEDICATED_WORKER}${encodeURIComponent(API_BASE + endpoint)}&cookie=${encodeURIComponent(cookieStr)}&token=${encodeURIComponent(useTok.token)}&uid=${encodeURIComponent(resolvedUid)}&base_url=${encodeURIComponent(API_BASE + "/")}`
+            );
             if (wRes.ok) { if (statusBadge) statusBadge.textContent = "Live"; return await wRes.json(); }
         } catch {}
         if (statusBadge) statusBadge.textContent = "Vault";
@@ -837,7 +911,10 @@ async function fetchAPIWithToken(endpoint, tokenObj, fallbackGetter) {
 function toggleExplorerExtras(showFilter, progressText = "") {
     document.getElementById("explorerFilterBar")?.classList.toggle("hidden", !showFilter);
     const pSum = document.getElementById("batchProgressSummary");
-    if (pSum) { if (progressText) { pSum.textContent = progressText; pSum.classList.remove("hidden"); } else pSum.classList.add("hidden"); }
+    if (pSum) {
+        if (progressText) { pSum.textContent = progressText; pSum.classList.remove("hidden"); }
+        else pSum.classList.add("hidden");
+    }
 }
 
 function getBatchWatchedCount(courseId) {
@@ -846,12 +923,15 @@ function getBatchWatchedCount(courseId) {
 }
 
 // =====================================================
-// BATCHES & COURSES (HYBRID COURSE VAULT + DRIVE THUMBNAILS)
+// BATCHES & COURSES (ROJGAR TEACHX + COURSE VAULT MERGE)
 // =====================================================
 function drawPaidBatchesGrid(mergedCourses) {
     const grid = document.getElementById("mainGrid");
     grid.innerHTML = "";
-    if (!mergedCourses.length) { grid.innerHTML = `<div class="col-span-full py-12 text-center font-extrabold">❌ In accounts mein koi paid batch nahi mila.</div>`; return; }
+    if (!mergedCourses.length) {
+        grid.innerHTML = `<div class="col-span-full py-12 text-center font-extrabold">❌ Is account mein koi paid batch nahi mila. Token/Account check karein ya Course Vault scan chalayein.</div>`;
+        return;
+    }
     mergedCourses.forEach(c => {
         if (c._boundTokenObj) state.courseTokenMap[String(c.id)] = c._boundTokenObj;
         if (c.test_series_id) state.courseTestSeriesMap[String(c.id)] = String(c.test_series_id);
@@ -866,7 +946,11 @@ function drawPaidBatchesGrid(mergedCourses) {
                     <div class="p-4">
                         <div class="flex justify-between items-center gap-2 flex-wrap">
                             <span class="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black">BATCH #${c.id}</span>
-                            ${c._fromVaultOnly ? `<span class="px-2 py-0.5 rounded-full bg-sky-100 text-sky-900 text-[10px] font-black">☁️ Cloud Archive</span>` : (watchedCnt > 0 ? `<span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-black">✅ ${watchedCnt} Watched</span>` : `<span class="text-[10px] font-bold text-sky-700 dark:text-sky-400 truncate">${c._badgeText || "Cloud"}</span>`)}
+                            ${c._fromVaultOnly
+                                ? `<span class="px-2 py-0.5 rounded-full bg-sky-100 text-sky-900 text-[10px] font-black">☁️ Vault Archive</span>`
+                                : (watchedCnt > 0
+                                    ? `<span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-black">✅ ${watchedCnt} Watched</span>`
+                                    : `<span class="text-[10px] font-bold text-sky-700 dark:text-sky-400 truncate">${c._badgeText || "Rojgar Live"}</span>`)}
                         </div>
                         <h3 class="font-black text-base mt-2">${c.course_name}</h3>
                     </div>
@@ -881,13 +965,16 @@ async function renderPaidBatches(forceRefresh = false) {
     state.view = "batches";
     document.getElementById("subTabs").classList.add("hidden");
     toggleExplorerExtras(false);
-    document.getElementById("crumbText").textContent = "All Purchased Courses";
+    document.getElementById("crumbText").textContent = "Rojgar + Course Vault";
     document.getElementById("headingText").textContent = "🎓 Purchased Paid Batches";
     const grid = document.getElementById("mainGrid");
 
     if (!forceRefresh) {
         const cached = readLocalCache(CACHE_KEYS.PAID_BATCHES);
-        if (Array.isArray(cached) && cached.length > 0) { drawPaidBatchesGrid(cached); return; }
+        if (Array.isArray(cached) && cached.length > 0) {
+            drawPaidBatchesGrid(cached);
+            return;
+        }
     }
 
     renderSkeletonCards(grid, 6);
@@ -904,18 +991,21 @@ async function renderPaidBatches(forceRefresh = false) {
             const data = await fetchAPIWithToken(ep, tokObj, () => null);
             if (Array.isArray(data) && data.length > 0) {
                 data.forEach(c => {
-                    const cid = String(c.id || c.course_id || "").trim(), cname = String(c.course_name || "").trim();
+                    const cid = String(c.id || c.course_id || "").trim();
+                    const cname = String(c.course_name || "").trim();
                     if (cid && !seenIds.has(cid) && (!cname || !seenIds.has(cname))) {
-                        seenIds.add(cid); if (cname) seenIds.add(cname);
+                        seenIds.add(cid);
+                        if (cname) seenIds.add(cname);
                         const vc = vaultMap[cid] || {};
                         state.courseTokenMap[cid] = tokObj;
                         if (c.test_series_id) state.courseTestSeriesMap[cid] = String(c.test_series_id);
                         mergedCourses.push({
-                            ...c, id: cid,
+                            ...c,
+                            id: cid,
                             drive_thumb_url: vc.drive_thumb_url || "",
                             playback_mode: vc.playback_mode || "vault_first",
                             _boundTokenObj: tokObj,
-                            _badgeText: tokObj.isAdmin ? "Cloud Server" : `🔑 ${tokObj.label || "My Account"}`
+                            _badgeText: tokObj.isAdmin ? "Cloud Pool" : `🔑 ${tokObj.label || "My Account"}`
                         });
                     }
                 });
@@ -923,19 +1013,25 @@ async function renderPaidBatches(forceRefresh = false) {
         }
     }
 
-    // Rescue Deleted / Vault-Only Archived Batches
     vaultCourses.forEach(vc => {
         const cid = String(vc.course_id || vc.id || "").trim();
         if (cid && !seenIds.has(cid)) {
             seenIds.add(cid);
-            mergedCourses.push({ ...vc, id: cid, _fromVaultOnly: true, _badgeText: "☁️ Cloud Archive" });
+            mergedCourses.push({
+                ...vc,
+                id: cid,
+                _fromVaultOnly: true,
+                _badgeText: "☁️ Vault Archive"
+            });
         }
     });
 
     if (mergedCourses.length > 0) {
         writeLocalCache(CACHE_KEYS.PAID_BATCHES, mergedCourses);
         syncUserCoursesToMongoDB(mergedCourses);
-        if (window.PRO_STORE) PRO_STORE.search_cache.batches = mergedCourses.map(b => ({ id: b.id, course_name: b.course_name }));
+        if (window.PRO_STORE) {
+            PRO_STORE.search_cache.batches = mergedCourses.map(b => ({ id: b.id, course_name: b.course_name }));
+        }
     }
     drawPaidBatchesGrid(mergedCourses);
 }
@@ -943,7 +1039,8 @@ async function renderPaidBatches(forceRefresh = false) {
 async function renderFreeBatches(forceRefresh = false) {
     if (!enforceCompulsoryLogin()) return;
     state.view = "batches";
-    document.getElementById("subTabs").classList.add("hidden"); toggleExplorerExtras(false);
+    document.getElementById("subTabs").classList.add("hidden");
+    toggleExplorerExtras(false);
     document.getElementById("crumbText").textContent = "Free Portal";
     document.getElementById("headingText").textContent = "🆓 RWA Free Batches";
     const grid = document.getElementById("mainGrid"), primaryTok = USER_TOKENS[0];
@@ -964,11 +1061,14 @@ async function renderFreeBatches(forceRefresh = false) {
 
 function openPaidCourse(id, name) {
     const cid = String(id).trim();
-    state.cat = "paid"; state.courseId = cid; state.courseName = name;
+    state.cat = "paid";
+    state.courseId = cid;
+    state.courseName = name;
     state.activeTokenObj = getCourseBoundToken(cid);
     window.ACTIVE_PLAYER_TOKEN = state.activeTokenObj ? state.activeTokenObj.token : "";
     if (typeof logUserActivity === "function") logUserActivity("OPEN_BATCH", `${name} (#${cid})`);
-    document.getElementById("subTabs").classList.remove("hidden"); toggleExplorerExtras(false);
+    document.getElementById("subTabs").classList.remove("hidden");
+    toggleExplorerExtras(false);
     document.getElementById("crumbText").textContent = `Batch #${cid}`;
     document.getElementById("headingText").textContent = name;
     pushNavHistoryState("subjects");
@@ -976,7 +1076,8 @@ function openPaidCourse(id, name) {
 }
 
 async function openFreeCourse(id, name) {
-    const cid = String(id).trim(); state.cat = "free"; state.courseId = cid; state.courseName = name; state.view = "subjects";
+    const cid = String(id).trim();
+    state.cat = "free"; state.courseId = cid; state.courseName = name; state.view = "subjects";
     state.activeTokenObj = getCourseBoundToken(cid);
     document.getElementById("subTabs").classList.add("hidden"); toggleExplorerExtras(false);
     document.getElementById("crumbText").textContent = "Free Batch"; document.getElementById("headingText").textContent = name;
@@ -997,9 +1098,14 @@ function openFreeLectures(topId, topName) {
 }
 
 async function loadCourseTab(tab) {
-    ["subjects", "live", "tests", "telegram"].forEach(t => { const el = document.getElementById("sub_" + t); if (el) el.className = (t === tab) ? "tab-pill active-pill" : "tab-pill"; });
-    const grid = document.getElementById("mainGrid"); renderSkeletonCards(grid, 4);
-    const batchTok = getCourseBoundToken(state.courseId); state.activeTokenObj = batchTok;
+    ["subjects", "live", "tests", "telegram"].forEach(t => {
+        const el = document.getElementById("sub_" + t);
+        if (el) el.className = (t === tab) ? "tab-pill active-pill" : "tab-pill";
+    });
+    const grid = document.getElementById("mainGrid");
+    renderSkeletonCards(grid, 4);
+    const batchTok = getCourseBoundToken(state.courseId);
+    state.activeTokenObj = batchTok;
 
     if (tab === "subjects") {
         state.view = "subjects"; toggleExplorerExtras(false);
@@ -1162,13 +1268,16 @@ function renderLectureList(list, boundTokenObj, filterMode = "all") {
     const grid = document.getElementById("mainGrid");
     state.lastRenderedLectures = list || []; state.activeExplorerFilter = filterMode;
     const lectureTok = boundTokenObj || getCourseBoundToken(state.courseId);
-    if (!list || !list.length) { toggleExplorerExtras(false); grid.innerHTML = `<div class="col-span-full sky-card p-10 text-center font-bold opacity-70">Is folder mein abhi koi class nahi hai.</div>`; return; }
+    if (!list || !list.length) {
+        toggleExplorerExtras(false);
+        grid.innerHTML = `<div class="col-span-full sky-card p-10 text-center font-bold opacity-70">Is folder mein abhi koi class nahi hai.</div>`;
+        return;
+    }
 
     let completedCount = 0;
     const prepared = list.map((item, i) => {
         const key = `lec_${item.id || i}`;
         const qMap = extractQualitiesFromItem(item);
-        // Prefer Google Drive PDFs when archived!
         const pdf1 = item.drive_pdf1_url || resolvePdfUrl(item.pdf_link || item.ypdf_link, item.ypdf_link2);
         const pdf2 = item.drive_pdf2_url || resolvePdfUrl(item.pdf_link2, item.ypdf_link2);
         const thumb = item.drive_thumb_url || item.thumbnail || "";
@@ -1254,7 +1363,6 @@ async function playClassInRwaPlayer(key) {
 
     const urlInput = document.getElementById("url");
 
-    // 1. Check Course Vault (YouTube Unlisted + Drive PDFs) FIRST for ₹0 Bandwidth Cost!
     if (!info.yt_video_id && info.id && isCourseVaultConfigured()) {
         const cvLec = await fetchCourseVaultSingleLecture(info.id);
         if (cvLec) {
@@ -1271,7 +1379,6 @@ async function playClassInRwaPlayer(key) {
         return;
     }
 
-    // 2. Automatic Live HLS Fallback (for brand-new classes not yet uploaded by Termux)
     if (state.cat === "paid" && info.id) {
         const videoEp = `/get/fetchVideoDetailsById?course_id=${targetCourseId}&video_id=${info.id}&ytflag=0&folder_wise_course=0&lc_app_api_url=`;
         let fresh = await fetchAPIWithToken(videoEp, batchTok, () => null);
@@ -1320,7 +1427,6 @@ function renderNextClassesBelowPlayer(activeKey) {
     }).join("") : `<div class="col-span-full py-6 text-center text-xs font-bold opacity-65">Is topic mein yeh aakhri class hai.</div>`;
 }
 
-// GOOGLE DRIVE NATIVE PDF PREVIEW + APPX VIEWER
 function buildPdfViewerSrc(u, mode) {
     if (!u) return "";
     if (u.includes("drive.google.com/file/d/")) return u;
