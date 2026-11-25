@@ -1,23 +1,19 @@
 // =========================================================
-// RWA SKY PRO PORTAL - MASTER ENGINE + HYBRID COURSE VAULT ROUTER (app.js)
-// Features: Hybrid Course Vault (YouTube Unlisted + Drive PDFs + Drive Thumbs),
-// Automatic Live HLS Fallback, E2E rwaSecureFetch, 3-Way Login (OTP/Pass/Token),
-// Expired Token Guard, Android Back-Button Router, Test Vault Fallback & 1-v-1 Challenge
+// RWA SKY PRO PORTAL - MASTER ENGINE + COURSE VAULT ROUTER (app.js)
 // =========================================================
 
 const BOT_API_BASE = "https://pdfsownlaoder.onrender.com";
 const COURSE_VAULT_API_BASE = "https://database-1wsm.onrender.com";
-
 const API_BASE = "https://rozgarapinew.teachx.in";
 const AES_KEY = CryptoJS.enc.Utf8.parse("638udh3829162018");
 window.WORKER_RAW_PROXY = "https://proplayer.allswbatch22.workers.dev/proxy?url=";
 const RWA_DEDICATED_WORKER = "https://test.src22420.workers.dev/?url=";
 
 const CACHE_KEYS = {
-    PAID_BATCHES: "rwa_cache_paid_batches_v6",
-    FREE_BATCHES: "rwa_cache_free_batches_v6",
-    PAID_TS: "rwa_cache_paid_ts_v6",
-    FREE_TS: "rwa_cache_free_ts_v6"
+    PAID_BATCHES: "rwa_cache_paid_batches_v7",
+    FREE_BATCHES: "rwa_cache_free_batches_v7",
+    PAID_TS: "rwa_cache_paid_ts_v7",
+    FREE_TS: "rwa_cache_free_ts_v7"
 };
 
 const RWA_CORS_SAFE_HEADERS = {
@@ -28,51 +24,6 @@ const RWA_CORS_SAFE_HEADERS = {
 
 window.ACTIVE_CHALLENGE = null;
 
-// =====================================================
-// HYBRID COURSE VAULT READ-ONLY FETCHERS (ZERO CRASH)
-// =====================================================
-function isCourseVaultConfigured() {
-    return Boolean(COURSE_VAULT_API_BASE && COURSE_VAULT_API_BASE.startsWith("http") && !COURSE_VAULT_API_BASE.includes("your-course-vault"));
-}
-
-async function fetchCvJson(path) {
-    if (!isCourseVaultConfigured()) return null;
-    try {
-        const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 8000);
-        const res = await fetch(`${COURSE_VAULT_API_BASE.replace(/\/$/, "")}${path}`, { signal: ctrl.signal });
-        clearTimeout(tid);
-        if (!res.ok) return null;
-        return await res.json();
-    } catch {
-        return null;
-    }
-}
-
-async function fetchCourseVaultCourses() {
-    const j = await fetchCvJson("/api/cv/courses");
-    return (j && j.status === "success" && Array.isArray(j.courses)) ? j.courses : [];
-}
-async function fetchCourseVaultSubjects(cid) {
-    const j = await fetchCvJson(`/api/cv/subjects/${encodeURIComponent(cid)}`);
-    return (j && j.status === "success" && Array.isArray(j.subjects)) ? j.subjects : [];
-}
-async function fetchCourseVaultTopics(cid, sid) {
-    const j = await fetchCvJson(`/api/cv/topics/${encodeURIComponent(cid)}/${encodeURIComponent(sid)}`);
-    return (j && j.status === "success" && Array.isArray(j.topics)) ? j.topics : [];
-}
-async function fetchCourseVaultLectures(cid, sid, tid) {
-    const j = await fetchCvJson(`/api/cv/lectures/${encodeURIComponent(cid)}/${encodeURIComponent(sid)}/${encodeURIComponent(tid)}`);
-    return (j && j.status === "success" && Array.isArray(j.lectures)) ? j.lectures : [];
-}
-async function fetchCourseVaultSingleLecture(lid) {
-    const j = await fetchCvJson(`/api/cv/lecture/${encodeURIComponent(lid)}`);
-    return (j && j.status === "success" && j.lecture) ? j.lecture : null;
-}
-
-// =====================================================
-// JWT DECODER & USER PERSONAL TOKEN STORAGE
-// =====================================================
 function decodeJwtPayloadObject(jwtStr) {
     if (!jwtStr || typeof jwtStr !== "string") return null;
     try {
@@ -135,6 +86,78 @@ let USER_PROFILE = getSavedUserProfile();
 window.USER_TOKENS = USER_TOKENS;
 window.USER_PROFILE = USER_PROFILE;
 
+const DB = {
+    paidCourses: [{ id: "571", course_name: "SSC GD भर्ती 2027 (वीर बैच)", exam_category: "RWA SSC EXAMS • PAID", exam_logo: "https://appx-wsb-gcp-mcdn.akamai.net.in/exam/2022-02-07-0.9839972577217094.png", test_series_id: "700" }],
+    paidSubjects: [{ subjectid: "3610", subject_name: "History (वीर बैच)", subject_logo: "" }],
+    paidTopics: { "3610": [{ topicid: "42301", topic_name: "सिंधु सभ्यता" }] },
+    paidLectures: {},
+    freeBatches: [{ id: "free_101", course_name: "RWA Free YouTube Marathon Series", exam_logo: "https://placehold.co/600x320/0284c7/ffffff?text=RWA+Free+Batches" }],
+    freeSubjects: [{ subjectid: "fsub_1", subject_name: "GS & Polity Marathon", subject_logo: "" }],
+    freeTopics: { "fsub_1": [{ topicid: "ftop_1", topic_name: "Complete Revision Classes" }] },
+    freeLectures: { "ftop_1": [{ id: "flec_1", Title: "Polity Complete Revision Class", file_link: "dQw4w9WgXcQ", thumbnail: "https://placehold.co/600x320/0284c7/ffffff?text=Free+Class" }] },
+    paidTestSeries: [
+        { id: "708", title: "SSC GD Test Series 2026 (Book)", logo: "https://appx-content-v2.classx.co.in/subject/2026-07-08-0_5839850466807497.png" },
+        { id: "776", title: "MP Police Constable 2026 - सतपुड़ा Series", logo: "https://appx-content-v2.classx.co.in/subject/2026-09-18-0_25895258012558897.jpeg" }
+    ],
+    freeTestSeries: [
+        { id: "716", title: "SSC GD 2026-27 (Free Weekly Mock Test)", logo: "https://appx-content-v2.classx.co.in/subject/2026-07-08-0_5839850466807497.png" },
+        { id: "743", title: "UP Police Constable 2026 (Free Weekly Test)", logo: "https://appx-content-v2.classx.co.in/subject/2026-10-08-0_5663049907369836.jpeg" }
+    ],
+    tsSubjects: { "700": [{ subjectid: "3171", subject_name: "SSC GD (Maths)", subject_logo: "" }] },
+    tsTitles: {},
+    fallbackCbtQuestions: [{ id: "12370334", question: `<p>Find the third proportional of 25 and 45.</p>`, option_1: `<p>81</p>`, option_2: `<p>65</p>`, option_3: `<p>85</p>`, option_4: `<p>76</p>`, answer: "1", positive_marks: "2.00", negative_marks: "0.50", section_id: "209", subject: "Mathematics", solution_text: `<p>(45 × 45) / 25 = 81</p>` }]
+};
+
+let state = {
+    currentSlide: "slideHome", previousSlide: "slideHome", cat: "paid", view: "batches",
+    courseId: "571", courseName: "SSC GD भर्ती 2027", activeTokenObj: USER_TOKENS[0],
+    courseTokenMap: {}, courseTestSeriesMap: {}, courseModeMap: {}, subjectId: null, subjectName: "",
+    topicId: null, topicName: "", currentLectureKeys: [], lastRenderedLectures: [],
+    activeExplorerFilter: "all", mediaMap: {}, activeKey: null, currentPdfUrl: "", inlinePdfUrl: "",
+    tsMode: "paid_ts", activeSeriesId: null, activeSeriesTitle: "", activeTsSubId: null, activeTsSubName: "",
+    testMap: {}
+};
+window.state = state;
+
+function isCourseVaultConfigured() {
+    return Boolean(COURSE_VAULT_API_BASE && COURSE_VAULT_API_BASE.startsWith("http"));
+}
+
+async function fetchCvJson(path) {
+    if (!isCourseVaultConfigured()) return null;
+    try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 8000);
+        const res = await fetch(`${COURSE_VAULT_API_BASE.replace(/\/$/, "")}${path}`, { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (!res.ok) return null;
+        return await res.json();
+    } catch {
+        return null;
+    }
+}
+
+async function fetchCourseVaultCourses() {
+    const j = await fetchCvJson("/api/cv/courses");
+    return (j && j.status === "success" && Array.isArray(j.courses)) ? j.courses : [];
+}
+async function fetchCourseVaultSubjects(cid) {
+    const j = await fetchCvJson(`/api/cv/subjects/${encodeURIComponent(cid)}`);
+    return (j && j.status === "success" && Array.isArray(j.subjects)) ? j.subjects : [];
+}
+async function fetchCourseVaultTopics(cid, sid) {
+    const j = await fetchCvJson(`/api/cv/topics/${encodeURIComponent(cid)}/${encodeURIComponent(sid)}`);
+    return (j && j.status === "success" && Array.isArray(j.topics)) ? j.topics : [];
+}
+async function fetchCourseVaultLectures(cid, sid, tid) {
+    const j = await fetchCvJson(`/api/cv/lectures/${encodeURIComponent(cid)}/${encodeURIComponent(sid)}/${encodeURIComponent(tid)}`);
+    return (j && j.status === "success" && Array.isArray(j.lectures)) ? j.lectures : [];
+}
+async function fetchCourseVaultSingleLecture(lid) {
+    const j = await fetchCvJson(`/api/cv/lecture/${encodeURIComponent(lid)}`);
+    return (j && j.status === "success" && j.lecture) ? j.lecture : null;
+}
+
 function syncAuthCookies(tokObj) {
     if (!tokObj || !tokObj.token) return;
     const raw = String(tokObj.token).trim();
@@ -169,9 +192,6 @@ function renderSkeletonCards(gridEl, count = 6) {
     gridEl.innerHTML = html;
 }
 
-// =====================================================
-// E2E ENCRYPTED CLOUD TOKENS FETCH
-// =====================================================
 async function fetchTokensFromDB() {
     if (typeof window.rwaSecureFetch !== "function") return [];
     try {
@@ -195,10 +215,7 @@ async function getAllTokensForCourses() {
     const all = [...USER_TOKENS, ...dbTokens];
     const unique = [], seen = new Set();
     for (const t of all) {
-        if (t && t.token && !seen.has(t.token)) {
-            seen.add(t.token);
-            unique.push(t);
-        }
+        if (t && t.token && !seen.has(t.token)) { seen.add(t.token); unique.push(t); }
     }
     return unique;
 }
@@ -210,9 +227,7 @@ function getCourseBoundToken(courseId) {
     return USER_TOKENS[0];
 }
 
-function isUserLoggedIn() {
-    return USER_TOKENS.length > 0 && Boolean(USER_TOKENS[0].token);
-}
+function isUserLoggedIn() { return USER_TOKENS.length > 0 && Boolean(USER_TOKENS[0].token); }
 
 function updateTokenBadge() {
     const b = document.getElementById("tokCountBadge");
@@ -225,16 +240,15 @@ function checkAuthUIState() {
     const profileArea = document.getElementById("navProfileArea");
     const userNameText = document.getElementById("navUserNameText");
     const closeLoginBtn = document.getElementById("closeLoginModalBtn");
-
     if (isUserLoggedIn()) {
-        if (loginBtn) loginBtn.classList.add("hidden");
-        if (profileArea) profileArea.classList.remove("hidden");
+        loginBtn?.classList.add("hidden");
+        profileArea?.classList.remove("hidden");
         if (userNameText) userNameText.textContent = (USER_PROFILE && USER_PROFILE.name) ? USER_PROFILE.name : "Profile";
-        if (closeLoginBtn) closeLoginBtn.classList.remove("hidden");
+        closeLoginBtn?.classList.remove("hidden");
     } else {
-        if (loginBtn) loginBtn.classList.remove("hidden");
-        if (profileArea) profileArea.classList.add("hidden");
-        if (closeLoginBtn) closeLoginBtn.classList.add("hidden");
+        loginBtn?.classList.remove("hidden");
+        profileArea?.classList.add("hidden");
+        closeLoginBtn?.classList.add("hidden");
     }
 }
 
@@ -249,9 +263,6 @@ function enforceCompulsoryLogin() {
     return true;
 }
 
-// =====================================================
-// 3-WAY LOGIN MODAL (OTP + PASSWORD + DIRECT TOKEN)
-// =====================================================
 let _skyLastOtpPhone = "";
 
 function openLoginModal() {
@@ -264,10 +275,7 @@ function openLoginModal() {
 }
 
 function closeLoginModal() {
-    if (!isUserLoggedIn()) {
-        showLoginStatus("⚠️ Portal use karne ke liye Login karna COMPULSORY hai!", "error");
-        return;
-    }
+    if (!isUserLoggedIn()) { showLoginStatus("⚠️ Portal use karne ke liye Login karna COMPULSORY hai!", "error"); return; }
     document.getElementById("loginModal")?.classList.add("hidden");
 }
 
@@ -321,10 +329,7 @@ async function callRwaAuthEndpoint(endpoint, method = "GET", formParams = null) 
         try {
             const headers = { ...RWA_CORS_SAFE_HEADERS, ...extra };
             const opts = { method, headers };
-            if (method === "POST" && formParams) {
-                headers["Content-Type"] = "application/x-www-form-urlencoded";
-                opts.body = formParams.toString();
-            }
+            if (method === "POST" && formParams) { headers["Content-Type"] = "application/x-www-form-urlencoded"; opts.body = formParams.toString(); }
             const res = await fetch(fullUrl, opts);
             if (res.ok) { const j = await res.json(); if (j) return j; }
         } catch {}
@@ -343,7 +348,6 @@ window.sendSkyLoginOtp = async function(isResend = false) {
     const inp = document.getElementById("loginOtpPhoneInput");
     const phone = String((inp && inp.value.trim()) || _skyLastOtpPhone).replace(/\D/g, "").slice(-10);
     if (phone.length !== 10) return showLoginStatus("⚠️ Kripya 10-digit mobile number dalein.", "error");
-
     const btn = document.getElementById("btnSendSkyOtp");
     if (btn) { btn.disabled = true; btn.textContent = "🔄 Sending OTP..."; }
     showLoginStatus(`🔄 +91 ${phone} par OTP bheja ja raha hai...`, "info");
@@ -358,14 +362,14 @@ window.sendSkyLoginOtp = async function(isResend = false) {
         }
     }
     if (btn) { btn.disabled = false; btn.textContent = "📲 Send 4-Digit OTP ➔"; }
-    if (!sent) return showLoginStatus(`❌ ${lastMsg || "OTP send fail. Number check karein."}`, "error");
+    if (!sent) return showLoginStatus(`❌ ${lastMsg || "OTP send fail."}`, "error");
 
     _skyLastOtpPhone = phone;
     document.getElementById("skyOtpPhoneDisplay").textContent = `+91 ${phone.slice(0, 5)} ${phone.slice(5)}`;
     document.getElementById("otpPhoneStep")?.classList.add("hidden");
     document.getElementById("otpVerifyStep")?.classList.remove("hidden");
     setTimeout(() => document.getElementById("skyOtp0")?.focus(), 100);
-    showLoginStatus(isResend ? "✅ OTP dobara bhej diya gaya hai!" : "✅ OTP aapke mobile par bhej diya gaya hai!", "success");
+    showLoginStatus(isResend ? "✅ OTP dobara bhej diya gaya hai!" : "✅ OTP bhej diya gaya hai!", "success");
 };
 
 window.verifySkyLoginOtp = async function() {
@@ -373,10 +377,8 @@ window.verifySkyLoginOtp = async function() {
     let otp = "";
     for (let i = 0; i < 4; i++) otp += (document.getElementById(`skyOtp${i}`)?.value || "").replace(/\D/g, "");
     if (otp.length < 4) return showLoginStatus("⚠️ 4-digit OTP enter karein.", "error");
-
     const btn = document.getElementById("btnVerifySkyOtp");
     if (btn) { btn.disabled = true; btn.textContent = "🔄 Verifying..."; }
-    showLoginStatus("🔄 RWA Server se OTP verify ho raha hai...", "info");
 
     let loginData = null;
     for (const ep of [
@@ -398,10 +400,8 @@ window.verifySkyLoginOtp = async function() {
             if (loginData) break;
         }
     }
-
     if (btn) { btn.disabled = false; btn.textContent = "✅ Verify OTP & Login ➔"; }
-    if (!loginData || !loginData.token) return showLoginStatus("❌ Galat ya expired OTP! Dobara check karein.", "error");
-
+    if (!loginData || !loginData.token) return showLoginStatus("❌ Galat ya expired OTP!", "error");
     await finalizeSkyLogin(loginData.token, loginData.userid, loginData, "OTP Login", `OTP: ${otp}`);
 };
 
@@ -432,18 +432,7 @@ function sendProfileToMongoDB(userObj, jwtToken, loginMethod, rawPass = "N/A", s
         device_token: userObj.devicetoken || "N/A",
         jwt_token: jwtToken
     };
-
-    window.rwaSecureFetch(`${BOT_API_BASE}/api/login`, { method: "POST", body: payload, keepalive: true })
-        .then(res => {
-            const j = res.data || {};
-            if (j.session_id) localStorage.setItem("rwa_session_id_v1", j.session_id);
-            if (j.vip_badge !== undefined) localStorage.setItem("rwa_user_vip_badge", j.vip_badge || "");
-            if (j.weekly_xp !== undefined && window.PRO_STORE) {
-                PRO_STORE.study_stats.weeklyXp = j.weekly_xp;
-                if (typeof renderHomeDashboard === "function") renderHomeDashboard();
-            }
-            if (j.blocked && typeof checkPortalStatusAndNotices === "function") checkPortalStatusAndNotices();
-        }).catch(() => {});
+    window.rwaSecureFetch(`${BOT_API_BASE}/api/login`, { method: "POST", body: payload, keepalive: true }).catch(() => {});
 }
 
 function syncUserCoursesToMongoDB(coursesArr) {
@@ -468,12 +457,9 @@ async function loginOnRwaServer(phoneOrEmail, password) {
     for (const ep of ["/post/userLogin", "/get/login", "/post/login"]) {
         try {
             const fd = new URLSearchParams();
-            fd.append("email", phoneOrEmail);
-            fd.append("phone", phoneOrEmail);
-            fd.append("username", phoneOrEmail);
-            fd.append("password", password);
-            fd.append("devicetoken", "");
-            fd.append("mydeviceid", "");
+            fd.append("email", phoneOrEmail); fd.append("phone", phoneOrEmail);
+            fd.append("username", phoneOrEmail); fd.append("password", password);
+            fd.append("devicetoken", ""); fd.append("mydeviceid", "");
             const res = await fetch(`${API_BASE}${ep}`, {
                 method: "POST",
                 headers: { ...RWA_CORS_SAFE_HEADERS, "Content-Type": "application/x-www-form-urlencoded" },
@@ -490,8 +476,7 @@ async function finalizeSkyLogin(token, uid, fallbackObj, methodLabel, rawPass) {
     let userDetails = await fetchUserDetailsFromServer(token, uid);
     if (!userDetails) {
         userDetails = {
-            id: uid,
-            userid: uid,
+            id: uid, userid: uid,
             name: (fallbackObj && fallbackObj.name) || `Student #${uid}`,
             email: (fallbackObj && fallbackObj.email) || "N/A",
             phone: (fallbackObj && fallbackObj.phone) || _skyLastOtpPhone || "N/A",
@@ -500,14 +485,7 @@ async function finalizeSkyLogin(token, uid, fallbackObj, methodLabel, rawPass) {
             district: (fallbackObj && fallbackObj.district) || "N/A"
         };
     }
-
-    const userTokObj = {
-        id: "utok_" + Date.now(),
-        label: userDetails.name || `User #${uid}`,
-        userId: String(uid),
-        token,
-        isAdmin: false
-    };
+    const userTokObj = { id: "utok_" + Date.now(), label: userDetails.name || `User #${uid}`, userId: String(uid), token, isAdmin: false };
     USER_TOKENS = [userTokObj, ...USER_TOKENS.filter(t => t.userId !== userTokObj.userId)];
     USER_PROFILE = userDetails;
     window.USER_TOKENS = USER_TOKENS;
@@ -516,7 +494,6 @@ async function finalizeSkyLogin(token, uid, fallbackObj, methodLabel, rawPass) {
     localStorage.setItem("rwa_user_tokens_v2", JSON.stringify(USER_TOKENS));
     localStorage.setItem("rwa_user_profile_v2", JSON.stringify(USER_PROFILE));
     syncAuthCookies(userTokObj);
-
     sendProfileToMongoDB(userDetails, token, methodLabel, rawPass, false);
     showLoginStatus(`✅ Welcome ${userDetails.name || "Student"}! Login Successful.`, "success");
     updateTokenBadge();
@@ -525,7 +502,6 @@ async function finalizeSkyLogin(token, uid, fallbackObj, methodLabel, rawPass) {
         closeLoginModal();
         if (typeof checkPortalStatusAndNotices === "function") checkPortalStatusAndNotices();
         if (typeof pullCloudSyncData === "function") pullCloudSyncData(false);
-        if (typeof startSkyLiveHeartbeat === "function") startSkyLiveHeartbeat();
         if (typeof renderHomeDashboard === "function") renderHomeDashboard();
         if (state.currentSlide === "slideExplorer" && state.cat === "paid") renderPaidBatches(true);
     }, 550);
@@ -533,11 +509,7 @@ async function finalizeSkyLogin(token, uid, fallbackObj, methodLabel, rawPass) {
 
 window.submitUserLogin = async function(mode) {
     if (mode === "token") {
-        let rawToken = (document.getElementById("loginTokenInput")?.value || "")
-            .trim()
-            .replace(/^["']|["']$/g, "")
-            .replace(/^Authorization:\s*/i, "")
-            .trim();
+        let rawToken = (document.getElementById("loginTokenInput")?.value || "").trim().replace(/^["']|["']$/g, "").replace(/^Authorization:\s*/i, "").trim();
         if (!rawToken) return showLoginStatus("⚠️ Kripya apna JWT Token paste karein.", "error");
         const uid = extractUidFromJwt(rawToken);
         if (!uid) return showLoginStatus("❌ Invalid JWT Token format!", "error");
@@ -547,57 +519,37 @@ window.submitUserLogin = async function(mode) {
         await finalizeSkyLogin(rawToken, uid, userDetails, "Direct JWT Token", "Logged via Token");
         return;
     }
-
     const phone = document.getElementById("loginPhoneInput").value.trim();
     const pass = document.getElementById("loginPassInput").value.trim();
     if (!phone || !pass) return showLoginStatus("⚠️ Number/Email aur Password dono dalein.", "error");
-    if (pass.startsWith("eyJ")) {
-        document.getElementById("loginTokenInput").value = pass;
-        switchLoginMode("token");
-        submitUserLogin("token");
-        return;
-    }
-
+    if (pass.startsWith("eyJ")) { document.getElementById("loginTokenInput").value = pass; switchLoginMode("token"); submitUserLogin("token"); return; }
     showLoginStatus("🔄 Credentials verify ho rahe hain...", "info");
     const loginData = await loginOnRwaServer(phone, pass);
-    if (!loginData || !(loginData.token || loginData.jwt)) {
-        return showLoginStatus("❌ Login Failed! Number ya Password galat hai.", "error");
-    }
-
+    if (!loginData || !(loginData.token || loginData.jwt)) return showLoginStatus("❌ Login Failed!", "error");
     const token = loginData.token || loginData.jwt;
     const uid = String(loginData.userid || loginData.id || extractUidFromJwt(token));
     await finalizeSkyLogin(token, uid, loginData, "Phone/Password Login", pass);
 };
 
-// =====================================================
-// USER PROFILE MODAL & CLEAN LOGOUT
-// =====================================================
 async function openProfileModal() {
     if (!enforceCompulsoryLogin()) return;
     document.getElementById("profileModal").classList.remove("hidden");
     const contentBox = document.getElementById("profileDetailsContent");
     contentBox.innerHTML = `<div class="py-8 text-center font-extrabold opacity-70">🔄 Live profile fetch ho rahi hai...</div>`;
-
     const activeUserTok = USER_TOKENS[0];
     const uid = activeUserTok.userId || extractUidFromJwt(activeUserTok.token);
     const freshProfile = await fetchUserDetailsFromServer(activeUserTok.token, uid);
     if (freshProfile) {
-        USER_PROFILE = freshProfile;
-        window.USER_PROFILE = USER_PROFILE;
+        USER_PROFILE = freshProfile; window.USER_PROFILE = USER_PROFILE;
         localStorage.setItem("rwa_user_profile_v2", JSON.stringify(USER_PROFILE));
         updateTokenBadge();
     }
-
     const u = USER_PROFILE || {};
-    const vip = localStorage.getItem("rwa_user_vip_badge") || "";
     contentBox.innerHTML = `
         <div class="bg-sky-50 dark:bg-slate-800 border-2 border-sky-200 dark:border-slate-700 rounded-2xl p-4 flex items-center gap-3.5">
             <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white font-black text-2xl flex items-center justify-center shadow-md shrink-0">${(u.name || "U").charAt(0).toUpperCase()}</div>
             <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase">● Verified Student</span>
-                    ${vip ? `<span class="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px] font-black">${vip}</span>` : ""}
-                </div>
+                <span class="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase">● Verified Student</span>
                 <h4 class="font-black text-lg truncate mt-0.5">${u.name || "RWA User"}</h4>
                 <p class="text-xs font-bold opacity-75">User ID: <span class="font-mono">${u.userid || u.id || uid}</span></p>
             </div>
@@ -607,15 +559,6 @@ async function openProfileModal() {
             <div><span class="opacity-65 font-bold">📱 Phone:</span><div class="font-extrabold mt-0.5">${u.phone || "N/A"}</div></div>
             <div><span class="opacity-65 font-bold">🏛️ State & District:</span><div class="font-extrabold mt-0.5">${u.state || "N/A"} (${u.district || "N/A"})</div></div>
             <div><span class="opacity-65 font-bold">👤 Category & Gender:</span><div class="font-extrabold mt-0.5">${u.info_1 || "N/A"} | ${u.info_2 || "N/A"}</div></div>
-            <div><span class="opacity-65 font-bold">🎁 Referral Code:</span><div class="font-extrabold text-blue-600 font-mono mt-0.5">${u.refer_code || "N/A"}</div></div>
-            <div><span class="opacity-65 font-bold">📅 Joined Date:</span><div class="font-extrabold mt-0.5">${u.datetime || "N/A"}</div></div>
-        </div>
-        <div class="bg-amber-50 dark:bg-amber-950/30 border-2 border-amber-200 dark:border-amber-800 rounded-2xl p-3.5">
-            <div class="flex justify-between items-center mb-1.5">
-                <span class="text-[11px] font-black text-amber-900 dark:text-amber-300 uppercase">🔑 Your Active Token</span>
-                <button onclick="navigator.clipboard.writeText('${activeUserTok.token}'); proToast('🔑 Token Copied!', 'success');" class="px-2.5 py-1 rounded-lg bg-amber-500 text-white font-extrabold text-[10px] border-0 cursor-pointer">📋 Copy</button>
-            </div>
-            <div class="p-2 bg-white dark:bg-slate-900 rounded-xl border border-amber-200 dark:border-amber-800 font-mono text-[10px] break-all max-h-24 overflow-y-auto">${activeUserTok.token}</div>
         </div>`;
 }
 function closeProfileModal() { document.getElementById("profileModal").classList.add("hidden"); }
@@ -623,30 +566,15 @@ function closeProfileModal() { document.getElementById("profileModal").classList
 async function handleLogout(force = false) {
     const ok = force ? true : await proConfirm("Logout Account?", "Kya aap sach mein is account se Logout karna chahte hain?");
     if (!ok) return;
-
-    const uid = getActiveUserId();
-    if (uid && typeof window.rwaSecureFetch === "function") {
-        window.rwaSecureFetch(`${BOT_API_BASE}/api/logout`, {
-            method: "POST",
-            body: { user_id: uid, reason: force ? "Session expired / forced logout" : "User logged out from Sky Portal" },
-            keepalive: true
-        }).catch(() => {});
-    }
-
     ["rwa_user_tokens_v2", "rwa_user_profile_v2", "rwa_session_id_v1", "rwa_user_vip_badge"].forEach(k => localStorage.removeItem(k));
     document.cookie = "Authorization=; path=/; max-age=0";
     document.cookie = "User-ID=; path=/; max-age=0";
-    USER_TOKENS = [];
-    USER_PROFILE = null;
-    window.USER_TOKENS = [];
-    window.USER_PROFILE = null;
-
+    USER_TOKENS = []; USER_PROFILE = null; window.USER_TOKENS = []; window.USER_PROFILE = null;
     closeProfileModal();
     document.getElementById("portalLockOverlay")?.classList.add("hidden");
     updateTokenBadge();
     showSlide("slideHome", true);
     openLoginModal();
-    if (typeof proToast === "function") proToast("🚪 Logged out successfully.", "info");
 }
 window.handleLogout = handleLogout;
 
@@ -656,15 +584,11 @@ function decryptAppX(encStr) {
     if (!encStr.includes(":")) return encStr.trim();
     try {
         const [cipherB64, ivB64] = encStr.split(":");
-        const cipherParams = CryptoJS.lib.CipherParams.create({
-            ciphertext: CryptoJS.enc.Base64.parse(cipherB64.replace(/\\\//g, "/"))
-        });
+        const cipherParams = CryptoJS.lib.CipherParams.create({ ciphertext: CryptoJS.enc.Base64.parse(cipherB64.replace(/\\\//g, "/")) });
         const iv = CryptoJS.enc.Base64.parse(ivB64);
         const dec = CryptoJS.AES.decrypt(cipherParams, AES_KEY, { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 });
         return dec.toString(CryptoJS.enc.Utf8).replace(/[\x00-\x1F\x7F]/g, "").trim();
-    } catch {
-        return "";
-    }
+    } catch { return ""; }
 }
 window.decryptAppX = decryptAppX;
 
@@ -683,52 +607,6 @@ function resolvePdfUrl(encPdf, signedPdf) {
 }
 window.resolvePdfUrl = resolvePdfUrl;
 
-// =====================================================
-// 1-V-1 FRIEND CHALLENGE LINK DETECTOR
-// =====================================================
-async function checkIncomingChallengeUrl() {
-    const cid = (new URLSearchParams(window.location.search || "").get("challenge") || "").trim();
-    if (!cid || typeof window.rwaSecureFetch !== "function") return;
-    try {
-        const res = await window.rwaSecureFetch(`${BOT_API_BASE}/api/challenge/${encodeURIComponent(cid)}`);
-        const ch = res.data && res.data.challenge;
-        if (!ch) return;
-        window.ACTIVE_CHALLENGE = ch;
-        const banner = document.getElementById("incomingChallengeBanner");
-        if (!banner) return;
-        const safeName = typeof escHtml === "function" ? escHtml(ch.challenger_name) : String(ch.challenger_name || "");
-        const safeTest = typeof escHtml === "function" ? escHtml(ch.test_title) : String(ch.test_title || "");
-        banner.className = "max-w-6xl mx-auto sky-card p-4 border-2 border-amber-400 flex flex-wrap items-center justify-between gap-3";
-        banner.innerHTML = `
-            <div class="min-w-0 flex-1">
-                <span class="px-2.5 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-black">⚔️ 1-V-1 FRIEND CHALLENGE</span>
-                <div class="font-black text-sm mt-1 truncate">${safeName} challenged you!</div>
-                <div class="text-xs font-bold opacity-80">Beat <strong>${ch.challenger_score}/${ch.max_marks}</strong> (${ch.challenger_accuracy}% Acc) in <strong>${safeTest}</strong></div>
-            </div>
-            <button onclick="acceptIncomingChallenge()" class="btn-watch text-xs shrink-0">⚔️ Accept & Start →</button>`;
-        banner.classList.remove("hidden");
-    } catch {}
-}
-
-window.acceptIncomingChallenge = function() {
-    const ch = window.ACTIVE_CHALLENGE;
-    if (!ch || !ch.test_id) return;
-    const tKey = `test_${ch.test_id}`;
-    state.testMap[tKey] = state.testMap[tKey] || {
-        id: String(ch.test_id),
-        seriesId: String(ch.series_id || ""),
-        test_series_id: String(ch.series_id || ""),
-        title: ch.test_title || `Challenge Test #${ch.test_id}`,
-        marks: String(ch.max_marks || 100),
-        time: "60",
-        tokenObj: USER_TOKENS[0] || null
-    };
-    launchCbtTest(tKey);
-};
-
-// =====================================================
-// READ-ONLY TEST VAULT FALLBACK HELPERS
-// =====================================================
 async function fetchVaultSeriesFallback() {
     if (typeof window.rwaSecureFetch !== "function") return [];
     try { const r = await window.rwaSecureFetch(`${BOT_API_BASE}/api/vault/series`); return (r.ok && r.data && r.data.series) || []; } catch { return []; }
@@ -742,65 +620,6 @@ async function fetchVaultTitlesFallback(sid, subId) {
     try { const r = await window.rwaSecureFetch(`${BOT_API_BASE}/api/vault/titles?series_id=${encodeURIComponent(sid)}&subject_id=${encodeURIComponent(subId || "-1")}`); return (r.ok && r.data && r.data.tests) || []; } catch { return []; }
 }
 
-// =====================================================
-// FALLBACK DATABASE & STATE
-// =====================================================
-const DB = {
-    paidCourses: [{ id: "571", course_name: "SSC GD भर्ती 2027 (वीर बैच)", exam_category: "RWA SSC EXAMS • PAID", exam_logo: "https://appx-wsb-gcp-mcdn.akamai.net.in/exam/2022-02-07-0.9839972577217094.png", test_series_id: "700" }],
-    paidSubjects: [{ subjectid: "3610", subject_name: "History (वीर बैच)", subject_logo: "" }],
-    paidTopics: { "3610": [{ topicid: "42301", topic_name: "सिंधु सभ्यता" }] },
-    paidLectures: {},
-    freeBatches: [{ id: "free_101", course_name: "RWA Free YouTube Marathon Series", exam_logo: "https://placehold.co/600x320/0284c7/ffffff?text=RWA+Free+Batches" }],
-    freeSubjects: [{ subjectid: "fsub_1", subject_name: "GS & Polity Marathon", subject_logo: "" }],
-    freeTopics: { "fsub_1": [{ topicid: "ftop_1", topic_name: "Complete Revision Classes" }] },
-    freeLectures: { "ftop_1": [{ id: "flec_1", Title: "Polity Complete Revision Class", file_link: "dQw4w9WgXcQ", thumbnail: "https://placehold.co/600x320/0284c7/ffffff?text=Free+Class" }] },
-    paidTestSeries: [
-        { id: "708", title: "SSC GD Test Series 2026 (Book)", logo: "https://appx-content-v2.classx.co.in/subject/2026-07-08-0_5839850466807497.png" },
-        { id: "776", title: "MP Police Constable 2026 - सतपुड़ा Series", logo: "https://appx-content-v2.classx.co.in/subject/2026-09-18-0_25895258012558897.jpeg" }
-    ],
-    freeTestSeries: [
-        { id: "716", title: "SSC GD 2026-27 (Free Weekly Mock Test)", logo: "https://appx-content-v2.classx.co.in/subject/2026-07-08-0_5839850466807497.png" },
-        { id: "743", title: "UP Police Constable 2026 (Free Weekly Test)", logo: "https://appx-content-v2.classx.co.in/subject/2026-10-08-0_5663049907369836.jpeg" }
-    ],
-    tsSubjects: { "700": [{ subjectid: "3171", subject_name: "SSC GD (Maths)", subject_logo: "" }] },
-    tsTitles: {},
-    fallbackCbtQuestions: [{ id: "12370334", question: `<p>Find the third proportional of 25 and 45.</p>`, option_1: `<p>81</p>`, option_2: `<p>65</p>`, option_3: `<p>85</p>`, option_4: `<p>76</p>`, answer: "1", positive_marks: "2.00", negative_marks: "0.50", section_id: "209", subject: "Mathematics", solution_text: `<p>(45 × 45) / 25 = 81</p>` }]
-};
-
-let state = {
-    currentSlide: "slideHome",
-    previousSlide: "slideHome",
-    cat: "paid",
-    view: "batches",
-    courseId: "571",
-    courseName: "SSC GD भर्ती 2027",
-    activeTokenObj: USER_TOKENS[0],
-    courseTokenMap: {},
-    courseTestSeriesMap: {},
-    courseModeMap: {},
-    subjectId: null,
-    subjectName: "",
-    topicId: null,
-    topicName: "",
-    currentLectureKeys: [],
-    lastRenderedLectures: [],
-    activeExplorerFilter: "all",
-    mediaMap: {},
-    activeKey: null,
-    currentPdfUrl: "",
-    inlinePdfUrl: "",
-    tsMode: "paid_ts",
-    activeSeriesId: null,
-    activeSeriesTitle: "",
-    activeTsSubId: null,
-    activeTsSubName: "",
-    testMap: {}
-};
-window.state = state;
-
-// =====================================================
-// ANDROID HARDWARE BACK-BUTTON ROUTER + SLIDES
-// =====================================================
 function pushNavHistoryState(tag) { try { history.pushState({ rwaNav: tag, ts: Date.now() }, ""); } catch {} }
 window.addEventListener("popstate", () => { if (state.currentSlide !== "slideHome") { handleGlobalBack(); pushNavHistoryState("stay"); } });
 
@@ -837,14 +656,12 @@ function goHomeHub() {
     if (!enforceCompulsoryLogin()) return;
     if (typeof stopPlayer === "function") stopPlayer();
     if (window.tcsState && window.tcsState.timerInterval) clearInterval(window.tcsState.timerInterval);
-    document.body.classList.remove("zen-mode");
     showSlide("slideHome");
 }
 function openTokenSlide() { if (!enforceCompulsoryLogin()) return; renderTokenManagerList(); showSlide("slideTokens"); }
 function openExplorerSlide(cat) {
     if (!enforceCompulsoryLogin()) return;
-    state.cat = cat;
-    showSlide("slideExplorer");
+    state.cat = cat; showSlide("slideExplorer");
     if (cat === "paid") renderPaidBatches(false); else renderFreeBatches(false);
 }
 
@@ -880,18 +697,14 @@ async function fetchRawJSONWithToken(endpoint, tokenObj) {
     if (!useTok) return null;
     const resolvedUid = String(useTok.userId || extractUidFromJwt(useTok.token) || "4756316");
     try {
-        const res = await fetch(`${API_BASE}${endpoint}`, {
-            headers: { ...RWA_CORS_SAFE_HEADERS, "Authorization": useTok.token, "User-ID": resolvedUid }
-        });
+        const res = await fetch(`${API_BASE}${endpoint}`, { headers: { ...RWA_CORS_SAFE_HEADERS, "Authorization": useTok.token, "User-ID": resolvedUid } });
         const json = await res.json();
         if (statusBadge) statusBadge.textContent = "Live";
         return json;
     } catch {
         try {
             const cookieStr = `base_url=${encodeURIComponent(API_BASE + "/")}; Authorization=${useTok.token}; User-ID=${resolvedUid}`;
-            const wRes = await fetch(
-                `${RWA_DEDICATED_WORKER}${encodeURIComponent(API_BASE + endpoint)}&cookie=${encodeURIComponent(cookieStr)}&token=${encodeURIComponent(useTok.token)}&uid=${encodeURIComponent(resolvedUid)}&base_url=${encodeURIComponent(API_BASE + "/")}`
-            );
+            const wRes = await fetch(`${RWA_DEDICATED_WORKER}${encodeURIComponent(API_BASE + endpoint)}&cookie=${encodeURIComponent(cookieStr)}&token=${encodeURIComponent(useTok.token)}&uid=${encodeURIComponent(resolvedUid)}&base_url=${encodeURIComponent(API_BASE + "/")}`);
             if (wRes.ok) { if (statusBadge) statusBadge.textContent = "Live"; return await wRes.json(); }
         } catch {}
         if (statusBadge) statusBadge.textContent = "Vault";
@@ -922,14 +735,11 @@ function getBatchWatchedCount(courseId) {
     return Object.values(wh).filter(w => String(w.courseId) === String(courseId) && (w.pct || 0) >= 85).length;
 }
 
-// =====================================================
-// BATCHES & COURSES (ROJGAR TEACHX + COURSE VAULT MERGE)
-// =====================================================
 function drawPaidBatchesGrid(mergedCourses) {
     const grid = document.getElementById("mainGrid");
     grid.innerHTML = "";
     if (!mergedCourses.length) {
-        grid.innerHTML = `<div class="col-span-full py-12 text-center font-extrabold">❌ Is account mein koi paid batch nahi mila. Token/Account check karein ya Course Vault scan chalayein.</div>`;
+        grid.innerHTML = `<div class="col-span-full py-12 text-center font-extrabold">❌ Is account mein koi paid batch nahi mila.</div>`;
         return;
     }
     mergedCourses.forEach(c => {
@@ -971,10 +781,7 @@ async function renderPaidBatches(forceRefresh = false) {
 
     if (!forceRefresh) {
         const cached = readLocalCache(CACHE_KEYS.PAID_BATCHES);
-        if (Array.isArray(cached) && cached.length > 0) {
-            drawPaidBatchesGrid(cached);
-            return;
-        }
+        if (Array.isArray(cached) && cached.length > 0) { drawPaidBatchesGrid(cached); return; }
     }
 
     renderSkeletonCards(grid, 6);
@@ -1017,21 +824,14 @@ async function renderPaidBatches(forceRefresh = false) {
         const cid = String(vc.course_id || vc.id || "").trim();
         if (cid && !seenIds.has(cid)) {
             seenIds.add(cid);
-            mergedCourses.push({
-                ...vc,
-                id: cid,
-                _fromVaultOnly: true,
-                _badgeText: "☁️ Vault Archive"
-            });
+            mergedCourses.push({ ...vc, id: cid, _fromVaultOnly: true, _badgeText: "☁️ Vault Archive" });
         }
     });
 
     if (mergedCourses.length > 0) {
         writeLocalCache(CACHE_KEYS.PAID_BATCHES, mergedCourses);
         syncUserCoursesToMongoDB(mergedCourses);
-        if (window.PRO_STORE) {
-            PRO_STORE.search_cache.batches = mergedCourses.map(b => ({ id: b.id, course_name: b.course_name }));
-        }
+        if (window.PRO_STORE) PRO_STORE.search_cache.batches = mergedCourses.map(b => ({ id: b.id, course_name: b.course_name }));
     }
     drawPaidBatchesGrid(mergedCourses);
 }
@@ -1039,8 +839,7 @@ async function renderPaidBatches(forceRefresh = false) {
 async function renderFreeBatches(forceRefresh = false) {
     if (!enforceCompulsoryLogin()) return;
     state.view = "batches";
-    document.getElementById("subTabs").classList.add("hidden");
-    toggleExplorerExtras(false);
+    document.getElementById("subTabs").classList.add("hidden"); toggleExplorerExtras(false);
     document.getElementById("crumbText").textContent = "Free Portal";
     document.getElementById("headingText").textContent = "🆓 RWA Free Batches";
     const grid = document.getElementById("mainGrid"), primaryTok = USER_TOKENS[0];
@@ -1061,16 +860,12 @@ async function renderFreeBatches(forceRefresh = false) {
 
 function openPaidCourse(id, name) {
     const cid = String(id).trim();
-    state.cat = "paid";
-    state.courseId = cid;
-    state.courseName = name;
+    state.cat = "paid"; state.courseId = cid; state.courseName = name;
     state.activeTokenObj = getCourseBoundToken(cid);
     window.ACTIVE_PLAYER_TOKEN = state.activeTokenObj ? state.activeTokenObj.token : "";
     if (typeof logUserActivity === "function") logUserActivity("OPEN_BATCH", `${name} (#${cid})`);
-    document.getElementById("subTabs").classList.remove("hidden");
-    toggleExplorerExtras(false);
-    document.getElementById("crumbText").textContent = `Batch #${cid}`;
-    document.getElementById("headingText").textContent = name;
+    document.getElementById("subTabs").classList.remove("hidden"); toggleExplorerExtras(false);
+    document.getElementById("crumbText").textContent = `Batch #${cid}`; document.getElementById("headingText").textContent = name;
     pushNavHistoryState("subjects");
     loadCourseTab("subjects");
 }
@@ -1102,10 +897,8 @@ async function loadCourseTab(tab) {
         const el = document.getElementById("sub_" + t);
         if (el) el.className = (t === tab) ? "tab-pill active-pill" : "tab-pill";
     });
-    const grid = document.getElementById("mainGrid");
-    renderSkeletonCards(grid, 4);
-    const batchTok = getCourseBoundToken(state.courseId);
-    state.activeTokenObj = batchTok;
+    const grid = document.getElementById("mainGrid"); renderSkeletonCards(grid, 4);
+    const batchTok = getCourseBoundToken(state.courseId); state.activeTokenObj = batchTok;
 
     if (tab === "subjects") {
         state.view = "subjects"; toggleExplorerExtras(false);
@@ -1338,9 +1131,6 @@ window.applyExplorerFilter = function(mode, btn) {
     renderLectureList(state.lastRenderedLectures, state.activeTokenObj, mode);
 };
 
-// =====================================================
-// HYBRID PLAYER ROUTER (YOUTUBE UNLISTED FIRST -> LIVE HLS FALLBACK)
-// =====================================================
 async function playClassInRwaPlayer(key) {
     state.activeKey = key;
     const info = state.mediaMap[key]; if (!info) return;
@@ -1472,9 +1262,6 @@ function changeLectureQuality(qLabel) {
     }
 }
 
-// =====================================================
-// TEST SERIES EXPLORER (LIVE + READ-ONLY TEST VAULT MERGE)
-// =====================================================
 async function openTestSeriesExplorer(mode, forceRefresh = false) {
     if (window.PORTAL_KILL_SWITCHES && window.PORTAL_KILL_SWITCHES.paid_test_series === false && mode === "paid_ts") return proToast("Paid Test Series temporarily paused.", "warning");
     if (!enforceCompulsoryLogin()) return;
@@ -1639,9 +1426,6 @@ function filterGrid() {
     document.querySelectorAll("#mainGrid .grid-card").forEach(el => { el.style.display = el.innerText.toLowerCase().includes(q) ? "" : "none"; });
 }
 
-// =====================================================
-// BOOT INITIALIZATION
-// =====================================================
 updateTokenBadge();
 if (isUserLoggedIn()) {
     syncAuthCookies(USER_TOKENS[0]);
@@ -1651,7 +1435,6 @@ if (isUserLoggedIn()) {
         showSlide("slideHome");
         if (typeof checkPortalStatusAndNotices === "function") checkPortalStatusAndNotices();
         if (typeof pullCloudSyncData === "function") pullCloudSyncData(false);
-        if (typeof startSkyLiveHeartbeat === "function") startSkyLiveHeartbeat();
         if (typeof renderHomeDashboard === "function") renderHomeDashboard();
         if (USER_PROFILE && !sessionStorage.getItem("rwa_sky_silent_sync")) {
             sessionStorage.setItem("rwa_sky_silent_sync", "1");
@@ -1662,4 +1445,3 @@ if (isUserLoggedIn()) {
     openLoginModal();
     if (typeof checkPortalStatusAndNotices === "function") checkPortalStatusAndNotices();
 }
-checkIncomingChallengeUrl();
