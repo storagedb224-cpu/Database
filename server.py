@@ -7,8 +7,8 @@ from flask import Flask, request, jsonify, make_response
 from waitress import serve
 
 import config
-from course_vault_db import course_vault_db, ram_cache, now_ist_str, drive_image_url
-from course_scanner import course_scanner
+from course_vault_db import course_vault_db, ram_cache
+from course_scanner import course_scanner, clean_jwt_token, extract_uid_from_jwt
 
 app = Flask(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -28,9 +28,6 @@ def send_tg_alert(text):
 course_scanner.alert_callback = send_tg_alert
 
 
-# =========================================================
-# CORS & ADMIN AUTH MIDDLEWARE
-# =========================================================
 def _cors(resp):
     origin = (request.headers.get("Origin") or "").strip().rstrip("/")
     if origin and (not config.ALLOWED_ORIGINS or origin.lower() in config.ALLOWED_ORIGINS):
@@ -66,9 +63,6 @@ def require_admin(fn):
     return wrapper
 
 
-# =========================================================
-# HEALTH CHECK
-# =========================================================
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({
@@ -80,9 +74,6 @@ def health():
     }), 200
 
 
-# =========================================================
-# PUBLIC READ-ONLY COURSE VAULT APIs (FOR RWA SKY PORTAL)
-# =========================================================
 @app.route("/api/cv/courses", methods=["GET"])
 def api_cv_courses():
     return jsonify({"status": "success", "courses": course_vault_db.get_all_courses()})
@@ -111,103 +102,6 @@ def api_cv_single_lecture(lecture_id):
     return jsonify({"status": "success", "lecture": doc})
 
 
-# =========================================================
-# TERMUX WORKER QUEUE & UPLOAD COMPLETION APIs
-# =========================================================
-@app.route("/api/worker/heartbeat", methods=["POST"])
-@require_admin
-def api_worker_heartbeat():
-    primary = course_vault_db.get_primary_db()
-    if not primary:
-        return jsonify({"status": "error", "message": "No primary DB"}), 500
-    data = request.get_json(silent=True) or {}
-    primary["db"].worker_status.update_one(
-        {"_id": "termux_archiver"},
-        {"$set": {
-            "status": str(data.get("status") or "ONLINE"),
-            "current_task": str(data.get("current_task") or "Idle / Watching Queue"),
-            "progress": int(data.get("progress") or 0),
-            "updated_at": now_ist_str(),
-            "ts": int(time.time())
-        }},
-        upsert=True
-    )
-    return jsonify({"status": "success"})
-
-
-@app.route("/api/worker/next", methods=["GET"])
-@require_admin
-def api_worker_next():
-    for entry in course_vault_db.dbs:
-        try:
-            doc = entry["db"].lectures.find_one_and_update(
-                {"status": "pending"},
-                {"$set": {"status": "processing", "updated_at": now_ist_str()}},
-                sort=[("ts", 1)],
-                return_document=True
-            )
-            if doc:
-                doc["_id"] = str(doc["_id"])
-                return jsonify({"status": "success", "job": doc})
-        except Exception:
-            continue
-    return jsonify({"status": "empty", "job": None})
-
-
-@app.route("/api/worker/complete", methods=["POST"])
-@require_admin
-def api_worker_complete():
-    data = request.get_json(silent=True) or {}
-    lid = str(data.get("lecture_id") or "").strip()
-    if not lid:
-        return jsonify({"status": "error", "message": "Missing lecture_id"}), 400
-    shard = course_vault_db._find_lecture_shard(lid)
-    if not shard:
-        return jsonify({"status": "error", "message": "Lecture not found"}), 404
-
-    upd = {
-        "status": "completed",
-        "error_message": "",
-        "updated_at": now_ist_str()
-    }
-    if data.get("yt_video_id"):
-        upd["yt_video_id"] = str(data["yt_video_id"]).strip()
-    if data.get("drive_pdf1_id"):
-        upd["drive_pdf1_id"] = str(data["drive_pdf1_id"]).strip()
-    if data.get("drive_pdf2_id"):
-        upd["drive_pdf2_id"] = str(data["drive_pdf2_id"]).strip()
-    if data.get("drive_thumb_id"):
-        upd["drive_thumb_id"] = str(data["drive_thumb_id"]).strip()
-        upd["drive_thumb_url"] = drive_image_url(data["drive_thumb_id"])
-
-    shard["db"].lectures.update_one({"lecture_id": lid}, {"$set": upd})
-    ram_cache.invalidate_prefix("cv_")
-    return jsonify({"status": "success"})
-
-
-@app.route("/api/worker/fail", methods=["POST"])
-@require_admin
-def api_worker_fail():
-    data = request.get_json(silent=True) or {}
-    lid = str(data.get("lecture_id") or "").strip()
-    err_msg = str(data.get("error_message") or "Upload/Download failed").strip()[:300]
-    if not lid:
-        return jsonify({"status": "error", "message": "Missing lecture_id"}), 400
-    shard = course_vault_db._find_lecture_shard(lid)
-    if not shard:
-        return jsonify({"status": "error", "message": "Lecture not found"}), 404
-
-    shard["db"].lectures.update_one(
-        {"lecture_id": lid},
-        {"$set": {"status": "failed", "error_message": err_msg, "updated_at": now_ist_str()}, "$inc": {"retry_count": 1}}
-    )
-    ram_cache.invalidate_prefix("cv_")
-    return jsonify({"status": "success"})
-
-
-# =========================================================
-# ADMIN PANEL APIs (SUMMARY, SCANNER, TOKENS, OVERRIDE)
-# =========================================================
 @app.route("/api/admin/auth", methods=["POST"])
 def api_admin_auth():
     data = request.get_json(silent=True) or {}
@@ -226,10 +120,41 @@ def api_admin_summary():
     })
 
 
+@app.route("/api/admin/token/verify", methods=["POST"])
+@require_admin
+def api_admin_token_verify():
+    data = request.get_json(silent=True) or {}
+    raw_token = clean_jwt_token(data.get("token", ""))
+    label = str(data.get("label") or "").strip()
+    if not raw_token:
+        return jsonify({"status": "error", "message": "Token paste karein."}), 400
+
+    res = course_scanner.verify_token_and_fetch_courses(raw_token)
+    if not res.get("ok"):
+        return jsonify({"status": "error", "message": res.get("message", "Token invalid!")}), 400
+
+    uid = res["user_id"]
+    final_label = label or res.get("user_name") or f"User #{uid}"
+    course_vault_db.upsert_scanner_token(uid, raw_token, final_label)
+    return jsonify({
+        "status": "success",
+        "user_id": uid,
+        "user_name": final_label,
+        "courses": res.get("courses", []),
+        "message": res.get("message", "Token Verified!")
+    })
+
+
 @app.route("/api/admin/scan/start", methods=["POST"])
 @require_admin
 def api_admin_scan_start():
-    ok, msg = course_scanner.start_scan(mode="manual")
+    data = request.get_json(silent=True) or {}
+    course_id = str(data.get("course_id") or "").strip()
+    raw_token = clean_jwt_token(data.get("token", ""))
+    user_id = str(data.get("user_id") or "").strip()
+    override = {"token": raw_token, "user_id": user_id or extract_uid_from_jwt(raw_token)} if raw_token else None
+
+    ok, msg = course_scanner.start_scan(mode="manual", target_course_id=course_id, override_token=override)
     return jsonify({"status": "success" if ok else "error", "message": msg, "scan": course_scanner.get_status()})
 
 
@@ -257,8 +182,10 @@ def api_admin_tokens():
         return jsonify({"status": "success", "tokens": course_vault_db.get_scanner_tokens()})
     data = request.get_json(silent=True) or {}
     if request.method == "POST":
-        ok = course_vault_db.upsert_scanner_token(data.get("user_id", ""), data.get("token", ""), data.get("label", "Scanner"))
-        return jsonify({"status": "success" if ok else "error"})
+        raw_tok = clean_jwt_token(data.get("token", ""))
+        uid = str(data.get("user_id") or "").strip() or extract_uid_from_jwt(raw_tok)
+        ok = course_vault_db.upsert_scanner_token(uid, raw_tok, data.get("label", "Scanner"))
+        return jsonify({"status": "success" if ok else "error", "user_id": uid})
     ok = course_vault_db.delete_scanner_token(data.get("user_id", ""))
     return jsonify({"status": "success" if ok else "error"})
 
@@ -300,9 +227,6 @@ def api_admin_flush():
     return jsonify({"status": "success", "cleared": cleared})
 
 
-# =========================================================
-# NIGHTLY 11:00 PM IST AUTOMATIC METADATA SCANNER
-# =========================================================
 def start_nightly_scheduler():
     last_date = None
 
