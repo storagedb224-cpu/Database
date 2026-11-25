@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <title>RWA Course Vault Admin | Token Verify & One-Click Course Scan</title>
+    <title>RWA Course Vault Admin | Token Verify, Scan, Stop & Remove</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -46,14 +46,13 @@
 
     <div id="cvToastBox" class="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-xs w-full pointer-events-none"></div>
 
-    <!-- LOCK SCREEN -->
     <div id="cvLockScreen" class="fixed inset-0 z-40 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
         <div class="glass max-w-md w-full rounded-3xl p-7 text-center space-y-4">
             <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-500 to-blue-700 text-white text-3xl font-black flex items-center justify-center mx-auto shadow-lg">🎓</div>
             <div>
                 <span class="px-3 py-1 rounded-full bg-sky-100 text-sky-900 text-[10px] font-black uppercase">Zero-Cost Streaming Vault</span>
                 <h1 class="text-2xl font-black mt-2">RWA COURSE VAULT ADMIN</h1>
-                <p class="text-xs font-bold opacity-70 mt-1">Verify Token → Pick Course → Auto Upload</p>
+                <p class="text-xs font-bold opacity-70 mt-1">Verify Token → Pick Course → Scan / Stop / Remove</p>
             </div>
             <div class="text-left space-y-2">
                 <label class="text-xs font-extrabold opacity-80">Course Vault Render URL</label>
@@ -66,24 +65,22 @@
         </div>
     </div>
 
-    <!-- MAIN DASHBOARD -->
     <div id="cvMainApp" class="hidden max-w-7xl mx-auto space-y-5">
 
-        <!-- TOP BAR -->
         <div class="glass rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
             <div>
                 <h1 class="text-xl font-black leading-tight">🎓 RWA Course Vault Command Center</h1>
                 <div id="cvTopMeta" class="text-[11px] font-bold opacity-70 mt-0.5">Updated: --</div>
             </div>
             <div class="flex items-center gap-2 flex-wrap">
+                <button onclick="stopCourseScan()" class="px-3.5 py-2 rounded-xl bg-rose-600 text-white font-black text-xs border-0 cursor-pointer">⏹ Stop Process</button>
                 <button onclick="retryAllFailedQueue()" class="px-3.5 py-2 rounded-xl bg-amber-500 text-white font-black text-xs border-0 cursor-pointer">🔄 Retry Failed</button>
                 <button onclick="flushCourseCache()" class="px-3.5 py-2 rounded-xl bg-indigo-600 text-white font-black text-xs border-0 cursor-pointer">⚡ Flush Cache</button>
                 <button onclick="refreshAllCourseVault()" class="btn-p px-4 py-2 text-xs">🔄 Refresh</button>
-                <button onclick="lockCourseAdmin()" class="px-3.5 py-2 rounded-xl bg-rose-600 text-white font-black text-xs border-0 cursor-pointer">🔒 Lock</button>
+                <button onclick="lockCourseAdmin()" class="px-3.5 py-2 rounded-xl bg-slate-800 text-white font-black text-xs border-0 cursor-pointer">🔒 Lock</button>
             </div>
         </div>
 
-        <!-- ONLY-TOKEN VERIFY & PURCHASED COURSES PICKER -->
         <div class="glass rounded-2xl p-5 space-y-4">
             <div class="flex flex-wrap justify-between items-center gap-2">
                 <div>
@@ -98,16 +95,12 @@
             </div>
             <div id="cvTokensList" class="flex flex-wrap gap-2 text-xs"></div>
 
-            <!-- VERIFIED PURCHASED COURSES LIST -->
             <div id="verifiedCoursesWrap" class="hidden pt-3 border-t border-sky-200 space-y-3">
-                <div class="flex justify-between items-center">
-                    <h4 id="verifiedCoursesTitle" class="font-black text-sm text-emerald-700">✅ Purchased Courses (Click any course to Start Scan & Upload)</h4>
-                </div>
+                <h4 id="verifiedCoursesTitle" class="font-black text-sm text-emerald-700">✅ Purchased Courses</h4>
                 <div id="verifiedCoursesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
             </div>
         </div>
 
-        <!-- TERMUX WORKER + SCANNER + LIVE LOGS -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div class="glass rounded-2xl p-5 space-y-3">
                 <div class="flex justify-between items-center">
@@ -128,11 +121,11 @@
                             <h3 class="font-black text-sm">🤖 Course Metadata Scanner (Render)</h3>
                             <span id="cvScanPill" class="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black">IDLE</span>
                         </div>
-                        <p class="text-[11px] font-bold opacity-65">Select a course above OR scan all saved tokens</p>
+                        <p class="text-[11px] font-bold opacity-65">Ek-ek link scan & queue • Stop button se kabhi bhi rokein</p>
                     </div>
                     <div class="flex gap-2">
                         <button id="cvStartScanBtn" onclick="startCourseScan('')" class="btn-p px-4 py-2 text-xs">🚀 Scan All</button>
-                        <button id="cvStopScanBtn" onclick="stopCourseScan()" class="hidden px-4 py-2 rounded-xl bg-rose-600 text-white font-black text-xs border-0 cursor-pointer">⏹ Stop</button>
+                        <button id="cvStopScanBtn" onclick="stopCourseScan()" class="px-4 py-2 rounded-xl bg-rose-600 text-white font-black text-xs border-0 cursor-pointer">⏹ Stop</button>
                     </div>
                 </div>
                 <div class="flex justify-between text-xs font-black">
@@ -149,7 +142,6 @@
             </div>
         </div>
 
-        <!-- DIRECT SUMMARY KPIs & SHARDS -->
         <div class="glass rounded-2xl p-5 space-y-4">
             <div class="flex justify-between items-center flex-wrap gap-2">
                 <h3 class="font-black text-base">📊 Course Vault Direct Summary</h3>
@@ -159,7 +151,6 @@
             <div id="cvShardsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
         </div>
 
-        <!-- WEBSITE-MIRROR COURSE EXPLORER -->
         <div class="glass rounded-2xl p-5 space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-3 border-b border-sky-200 pb-3">
                 <div class="flex items-center gap-2.5 min-w-0">
@@ -175,7 +166,6 @@
         </div>
     </div>
 
-    <!-- MANUAL OVERRIDE MODAL -->
     <div id="overrideModal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
         <div class="glass max-w-md w-full rounded-3xl p-6 space-y-3">
             <div class="flex justify-between items-center border-b border-sky-200 pb-2">
@@ -303,7 +293,6 @@
             else if (cv.view === "lectures") await openMirrorTopic(cv.topicId, cv.topicName);
         }
 
-        // VERIFY ONLY TOKEN -> SHOW PURCHASED COURSES
         async function verifyAndLoadTokenCourses() {
             const rawTok = document.getElementById("tkVal").value.trim();
             const btn = document.getElementById("btnVerifyToken");
@@ -340,7 +329,7 @@
                 const grid = document.getElementById("verifiedCoursesGrid");
                 wrap.classList.remove("hidden");
                 document.getElementById("verifiedCoursesTitle").textContent =
-                    `✅ ${r.data.user_name || "Account"} — ${courses.length} Purchased Course(s) (Click to Start Scan & Upload)`;
+                    `✅ ${r.data.user_name || "Account"} — ${courses.length} Purchased Course(s) (Click Start to Scan)`;
 
                 if (!courses.length) {
                     grid.innerHTML = `<div class="col-span-full p-4 rounded-xl bg-amber-50 text-amber-900 text-xs font-bold">Token valid hai, par is account mein koi purchased course nahi mila.</div>`;
@@ -378,8 +367,21 @@
 
         async function stopCourseScan() {
             const r = await api("/api/admin/scan/stop", "POST", {});
-            toast(r.data.message || "Stop sent", "warning");
+            toast(r.data.message || "Process stopped!", "warning");
+            if (r.data.scan) renderScanState(r.data.scan);
         }
+
+        async function deleteVaultCourse(courseId, courseName) {
+            if (!confirm(`Kya aap "${courseName}" (#${courseId}) ko Course Vault se remove karna chahte hain?`)) return;
+            const r = await api("/api/admin/course/delete", "POST", { course_id: courseId });
+            if (r.ok) {
+                toast(`🗑 Removed Batch #${courseId}!`, "info");
+                refreshAllCourseVault();
+            } else {
+                toast("Delete failed.", "error");
+            }
+        }
+
         async function retryAllFailedQueue(lecId = "") {
             const r = await api("/api/admin/queue/retry_failed", "POST", { lecture_id: lecId });
             if (r.ok) { toast(`🔄 Reset ${r.data.reset_count || 0} failed item(s) to pending!`, "success"); refreshAllCourseVault(); }
@@ -450,8 +452,6 @@
             const pill = document.getElementById("cvScanPill");
             pill.textContent = sc.status || "IDLE";
             pill.className = run ? "px-2.5 py-0.5 rounded-full bg-blue-600 text-white text-[10px] font-black animate-pulse" : "px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black";
-            document.getElementById("cvStartScanBtn").classList.toggle("hidden", run);
-            document.getElementById("cvStopScanBtn").classList.toggle("hidden", !run);
             document.getElementById("cvScanPhase").textContent = sc.current_phase || "Ready";
             document.getElementById("cvScanPct").textContent = `${sc.progress_percent || 0}%`;
             document.getElementById("cvScanBar").style.width = `${sc.progress_percent || 0}%`;
@@ -470,7 +470,10 @@
             const res = await fetch(`${cv.apiBase}/api/cv/courses`).then(r => r.json());
             const list = res.courses || [];
             const grid = document.getElementById("cvMirrorGrid");
-            if (!list.length) { grid.innerHTML = `<div class="col-span-full py-10 text-center text-xs font-bold opacity-65">Abhi koi batch archived nahi hai. Upar Token verify karke koi course start karein.</div>`; return; }
+            if (!list.length) {
+                grid.innerHTML = `<div class="col-span-full py-10 text-center text-xs font-bold opacity-65">Abhi koi batch archived nahi hai. Upar Token verify karke koi course start karein.</div>`;
+                return;
+            }
 
             grid.innerHTML = list.map(c => {
                 const isVaultMode = c.playback_mode !== "hls_live";
@@ -487,10 +490,11 @@
                                 <h4 class="font-black text-sm mt-1">${esc(c.course_name)}</h4>
                             </div>
                         </div>
-                        <div class="px-3.5 pb-3.5 flex items-center gap-2">
+                        <div class="px-3.5 pb-3.5 flex items-center gap-1.5 flex-wrap">
                             <button onclick="toggleBatchMode('${esc(c.course_id)}', '${isVaultMode ? "hls_live" : "vault_first"}')" class="flex-1 py-2 rounded-xl text-[11px] font-black border-0 cursor-pointer ${isVaultMode ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"}">
-                                ${isVaultMode ? "☁️ Mode: YT + Drive" : "📡 Mode: Live HLS"}
+                                ${isVaultMode ? "☁️ YT + Drive" : "📡 Live HLS"}
                             </button>
+                            <button onclick="deleteVaultCourse('${esc(c.course_id)}', '${safeName}')" class="px-2.5 py-2 rounded-xl bg-rose-600 text-white text-[11px] font-black border-0 cursor-pointer" title="Remove Course">🗑</button>
                             <button onclick="openMirrorCourse('${esc(c.course_id)}', '${safeName}')" class="btn-p px-3 py-2 text-xs">Open →</button>
                         </div>
                     </div>`;
