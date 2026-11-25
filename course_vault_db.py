@@ -271,6 +271,21 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix("cv_")
         return True
 
+    def clear_pending_queue(self, course_id=""):
+        """Clears pending, processing, and failed queue items so a fresh scan can start cleanly."""
+        deleted = 0
+        q = {"status": {"$in": ["pending", "processing", "failed"]}}
+        if course_id:
+            q["course_id"] = str(course_id).strip()
+        for entry in self.dbs:
+            try:
+                res = entry["db"].lectures.delete_many(q)
+                deleted += res.deleted_count
+            except Exception:
+                continue
+        ram_cache.invalidate_prefix("cv_")
+        return deleted
+
     def get_all_courses(self):
         cached = ram_cache.get("cv_courses:all")
         if cached is not None:
@@ -431,14 +446,14 @@ class CourseVaultDB:
             "title": str(lec_obj.get("Title") or lec_obj.get("title") or f"Class #{lid}").strip(),
             "date_and_time": str(lec_obj.get("date_and_time") or ""),
             "source_thumb": raw_thumb,
-            "source_video_url": str(lec_obj.get("source_video_url") or ""),
-            "source_pdf1_url": str(lec_obj.get("source_pdf1_url") or ""),
-            "source_pdf2_url": str(lec_obj.get("source_pdf2_url") or ""),
             "db_shard": target_shard["label"],
             "updated_at": now_str
         }
         on_insert = {
             "status": "pending",
+            "source_video_url": "",
+            "source_pdf1_url": "",
+            "source_pdf2_url": "",
             "yt_video_id": "",
             "drive_pdf1_id": "",
             "drive_pdf2_id": "",
@@ -460,7 +475,6 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix("cv_summary")
         return {"ok": True, "is_new": is_new, "shard": target_shard["label"]}
 
-    # Sequential 1-by-1 Link Feeder for Termux (no next link until current completes)
     def claim_next_lecture_one_by_one(self):
         for entry in self.dbs:
             try:
