@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <title>RWA Course Vault Admin | Token Verify, Scan, Stop & Remove</title>
+    <title>RWA Course Vault Admin | Token Verify, Scan, Stop & Clear Queue</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -44,15 +44,17 @@
 </head>
 <body class="p-3 sm:p-6">
 
+    <!-- TOAST -->
     <div id="cvToastBox" class="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-xs w-full pointer-events-none"></div>
 
+    <!-- LOCK SCREEN -->
     <div id="cvLockScreen" class="fixed inset-0 z-40 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
         <div class="glass max-w-md w-full rounded-3xl p-7 text-center space-y-4">
             <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-500 to-blue-700 text-white text-3xl font-black flex items-center justify-center mx-auto shadow-lg">🎓</div>
             <div>
                 <span class="px-3 py-1 rounded-full bg-sky-100 text-sky-900 text-[10px] font-black uppercase">Zero-Cost Streaming Vault</span>
                 <h1 class="text-2xl font-black mt-2">RWA COURSE VAULT ADMIN</h1>
-                <p class="text-xs font-bold opacity-70 mt-1">Verify Token → Pick Course → Scan / Stop / Remove</p>
+                <p class="text-xs font-bold opacity-70 mt-1">Verify Token → Pick Course → Scan / Stop / Clear Queue</p>
             </div>
             <div class="text-left space-y-2">
                 <label class="text-xs font-extrabold opacity-80">Course Vault Render URL</label>
@@ -65,8 +67,10 @@
         </div>
     </div>
 
+    <!-- MAIN DASHBOARD -->
     <div id="cvMainApp" class="hidden max-w-7xl mx-auto space-y-5">
 
+        <!-- TOP BAR -->
         <div class="glass rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
             <div>
                 <h1 class="text-xl font-black leading-tight">🎓 RWA Course Vault Command Center</h1>
@@ -74,6 +78,7 @@
             </div>
             <div class="flex items-center gap-2 flex-wrap">
                 <button onclick="stopCourseScan()" class="px-3.5 py-2 rounded-xl bg-rose-600 text-white font-black text-xs border-0 cursor-pointer">⏹ Stop Process</button>
+                <button onclick="clearAllQueue()" class="px-3.5 py-2 rounded-xl bg-orange-600 text-white font-black text-xs border-0 cursor-pointer">🧹 Clear Queue</button>
                 <button onclick="retryAllFailedQueue()" class="px-3.5 py-2 rounded-xl bg-amber-500 text-white font-black text-xs border-0 cursor-pointer">🔄 Retry Failed</button>
                 <button onclick="flushCourseCache()" class="px-3.5 py-2 rounded-xl bg-indigo-600 text-white font-black text-xs border-0 cursor-pointer">⚡ Flush Cache</button>
                 <button onclick="refreshAllCourseVault()" class="btn-p px-4 py-2 text-xs">🔄 Refresh</button>
@@ -81,6 +86,7 @@
             </div>
         </div>
 
+        <!-- ONLY-TOKEN VERIFY & PURCHASED COURSES PICKER -->
         <div class="glass rounded-2xl p-5 space-y-4">
             <div class="flex flex-wrap justify-between items-center gap-2">
                 <div>
@@ -95,12 +101,14 @@
             </div>
             <div id="cvTokensList" class="flex flex-wrap gap-2 text-xs"></div>
 
+            <!-- VERIFIED PURCHASED COURSES LIST -->
             <div id="verifiedCoursesWrap" class="hidden pt-3 border-t border-sky-200 space-y-3">
                 <h4 id="verifiedCoursesTitle" class="font-black text-sm text-emerald-700">✅ Purchased Courses</h4>
                 <div id="verifiedCoursesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
             </div>
         </div>
 
+        <!-- TERMUX WORKER + SCANNER + LIVE LOGS -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div class="glass rounded-2xl p-5 space-y-3">
                 <div class="flex justify-between items-center">
@@ -121,7 +129,7 @@
                             <h3 class="font-black text-sm">🤖 Course Metadata Scanner (Render)</h3>
                             <span id="cvScanPill" class="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black">IDLE</span>
                         </div>
-                        <p class="text-[11px] font-bold opacity-65">Ek-ek link scan & queue • Stop button se kabhi bhi rokein</p>
+                        <p class="text-[11px] font-bold opacity-65">On-Demand Fresh Links (1-by-1) • Stop ya Clear Queue kabhi bhi karein</p>
                     </div>
                     <div class="flex gap-2">
                         <button id="cvStartScanBtn" onclick="startCourseScan('')" class="btn-p px-4 py-2 text-xs">🚀 Scan All</button>
@@ -142,6 +150,7 @@
             </div>
         </div>
 
+        <!-- DIRECT SUMMARY KPIs & SHARDS -->
         <div class="glass rounded-2xl p-5 space-y-4">
             <div class="flex justify-between items-center flex-wrap gap-2">
                 <h3 class="font-black text-base">📊 Course Vault Direct Summary</h3>
@@ -151,6 +160,7 @@
             <div id="cvShardsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
         </div>
 
+        <!-- WEBSITE-MIRROR COURSE EXPLORER -->
         <div class="glass rounded-2xl p-5 space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-3 border-b border-sky-200 pb-3">
                 <div class="flex items-center gap-2.5 min-w-0">
@@ -166,6 +176,7 @@
         </div>
     </div>
 
+    <!-- MANUAL OVERRIDE MODAL -->
     <div id="overrideModal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
         <div class="glass max-w-md w-full rounded-3xl p-6 space-y-3">
             <div class="flex justify-between items-center border-b border-sky-200 pb-2">
@@ -369,6 +380,17 @@
             const r = await api("/api/admin/scan/stop", "POST", {});
             toast(r.data.message || "Process stopped!", "warning");
             if (r.data.scan) renderScanState(r.data.scan);
+        }
+
+        async function clearAllQueue() {
+            if (!confirm("Kya aap saare Pending/Failed links clear karke naya scan shuru karna chahte hain? (Completed videos safe rahengi)")) return;
+            const r = await api("/api/admin/queue/clear", "POST", {});
+            if (r.ok) {
+                toast(`🧹 Cleared ${r.data.deleted_count || 0} pending/failed item(s)!`, "success");
+                refreshAllCourseVault();
+            } else {
+                toast("Queue clear failed.", "error");
+            }
         }
 
         async function deleteVaultCourse(courseId, courseName) {
