@@ -102,9 +102,18 @@ def api_cv_single_lecture(lecture_id):
     return jsonify({"status": "success", "lecture": doc})
 
 
+# ON-DEMAND 1-BY-1 FRESH LINK API FOR TERMUX (ZERO EXPIRY!)
 @app.route("/api/worker/next_lecture", methods=["GET"])
 def api_worker_next_lecture():
     doc = course_vault_db.claim_next_lecture_one_by_one()
+    if not doc:
+        return jsonify({"status": "success", "lecture": None}), 200
+
+    # Extract brand-new fresh video & PDF links right now!
+    fresh = course_scanner.fetch_fresh_links_for_lecture(doc.get("course_id", ""), doc.get("lecture_id", ""))
+    doc["source_video_url"] = fresh.get("source_video_url", "")
+    doc["source_pdf1_url"] = fresh.get("source_pdf1_url", "")
+    doc["source_pdf2_url"] = fresh.get("source_pdf2_url", "")
     return jsonify({"status": "success", "lecture": doc}), 200
 
 
@@ -173,6 +182,15 @@ def api_admin_course_delete():
     cid = str(data.get("course_id") or request.args.get("course_id") or "").strip()
     ok = course_vault_db.delete_course(cid)
     return jsonify({"status": "success" if ok else "error", "deleted_course_id": cid})
+
+
+@app.route("/api/admin/queue/clear", methods=["POST"])
+@require_admin
+def api_admin_queue_clear():
+    data = request.get_json(silent=True) or {}
+    cid = str(data.get("course_id") or "").strip()
+    deleted = course_vault_db.clear_pending_queue(cid)
+    return jsonify({"status": "success", "deleted_count": deleted})
 
 
 @app.route("/api/admin/scan/start", methods=["POST"])
