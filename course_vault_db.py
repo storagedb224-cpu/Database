@@ -469,7 +469,6 @@ class CourseVaultDB:
 
         requeued = False
         if existing_doc:
-            # Dual check: if any asset (video/thumb/pdf1/pdf2) is missing in MongoDB, re-queue instead of skipping!
             if existing_doc.get("status") != "processing" and self._is_lecture_missing_assets(existing_doc, raw_thumb, has_pdf1, has_pdf2):
                 set_fields["status"] = "pending"
                 set_fields["error_message"] = ""
@@ -491,9 +490,17 @@ class CourseVaultDB:
             "ts": int(time.time())
         }
 
+        # Prevent MongoDB conflict (code 40) when a key is in both $set and $setOnInsert
+        for k in list(set_fields.keys()):
+            on_insert.pop(k, None)
+
+        update_doc = {"$set": set_fields}
+        if on_insert:
+            update_doc["$setOnInsert"] = on_insert
+
         target_shard["db"].lectures.update_one(
             {"lecture_id": lid},
-            {"$set": set_fields, "$setOnInsert": on_insert},
+            update_doc,
             upsert=True
         )
         ram_cache.invalidate_prefix(f"cv_lectures:{course_id}:{subject_id}:{topic_id}")
@@ -515,7 +522,6 @@ class CourseVaultDB:
                 q["topic_id"] = str(topic_id).strip()
 
         if not force_all and not lecture_id:
-            # Only re-queue items that are missing video/thumb/pdf or failed/incomplete
             q["$or"] = [
                 {"yt_video_id": {"$in": ["", None]}},
                 {"drive_thumb_id": {"$in": ["", None]}},
