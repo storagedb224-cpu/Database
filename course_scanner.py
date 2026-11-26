@@ -75,7 +75,11 @@ def decrypt_appx_str(enc_str):
         return s.replace("\\/", "/")
     try:
         cipher_b64, iv_b64 = s.split(":", 1)
-        ct = base64.b64decode(cipher_b64.replace("\\/", "/"))
+        cipher_b64 = cipher_b64.replace("\\/", "/").strip()
+        iv_b64 = iv_b64.strip()
+        cipher_b64 += "=" * (-len(cipher_b64) % 4)
+        iv_b64 += "=" * (-len(iv_b64) % 4)
+        ct = base64.b64decode(cipher_b64)
         iv = base64.b64decode(iv_b64)
         cipher = Cipher(algorithms.AES(APPX_AES_KEY), modes.CBC(iv))
         dec = cipher.decryptor()
@@ -156,6 +160,7 @@ class CourseMetadataScanner:
             "topics_found": 0,
             "lectures_found": 0,
             "new_lectures_queued": 0,
+            "requeued_missing": 0,
             "existing_skipped": 0,
             "errors": 0,
             "progress_percent": 0,
@@ -223,11 +228,6 @@ class CourseMetadataScanner:
         return []
 
     def fetch_fresh_links_for_lecture(self, course_id, lecture_id):
-        """
-        JUST-IN-TIME (On-Demand) link extractor!
-        Called ONLY when Termux is ready to download this exact lecture.
-        Prevents signed edge-cache-token expiry!
-        """
         cid = str(course_id or "").strip()
         lid = str(lecture_id or "").strip()
         tokens = course_vault_db.get_scanner_tokens()
@@ -339,7 +339,7 @@ class CourseMetadataScanner:
             self.state["status"] = "RUNNING"
             self.state["mode"] = mode
             self.state["started_at"] = _now_ist_str()
-            self.state["current_phase"] = f"Scanning folders for Batch #{target_cid}..." if target_cid else "Fetching Purchased Batches..."
+            self.state["current_phase"] = f"Dual-Scan (Server + DB) for Batch #{target_cid}..." if target_cid else "Fetching Purchased Batches..."
 
             self._thread = threading.Thread(
                 target=self._worker,
@@ -347,7 +347,7 @@ class CourseMetadataScanner:
                 daemon=True
             )
             self._thread.start()
-            msg = f"Batch #{target_cid} folder scan started!" if target_cid else f"Course {mode} folder scan started!"
+            msg = f"Batch #{target_cid} Dual-Scan started!" if target_cid else f"Course {mode} Dual-Scan started!"
             return True, msg
 
     def stop_scan(self):
@@ -365,10 +365,10 @@ class CourseMetadataScanner:
         return False
 
     def _worker(self, mode, tokens, target_course_id=""):
-        """Scans ONLY folders & class metadata (NO upfront video/PDF links so links never expire)."""
+        """Dual-Scan: Checks both RWA Server and MongoDB; re-queues any lecture missing thumb/pdf/video."""
         storage_full_hit = False
         try:
-            self._log(f"Started {mode.upper()} Folder/Class Scan (target={target_course_id or 'ALL'})...")
+            self._log(f"Started {mode.upper()} Dual-Scan (Server + MongoDB, target={target_course_id or 'ALL'})...")
             courses = []
             seen_cids = set()
 
@@ -401,7 +401,7 @@ class CourseMetadataScanner:
 
             with self._lock:
                 self.state["courses_total"] = len(courses)
-            self._log(f"Selected {len(courses)} batch(es) to index.")
+            self._log(f"Selected {len(courses)} batch(es) for Dual-Scan.")
 
             if not courses:
                 with self._lock:
@@ -420,7 +420,7 @@ class CourseMetadataScanner:
                 uid, tok = tk["user_id"], tk["token"]
 
                 with self._lock:
-                    self.state["current_phase"] = f"Indexing Batch {c_idx}/{len(courses)}: {cname}"
+                    self.state["current_phase"] = f"Dual-Scan Batch {c_idx}/{len(courses)}: {cname}"
                     self.state["current_course"] = f"{cname} (#{cid})"
                     self.state["courses_done"] = c_idx - 1
                     self.state["progress_percent"] = int(((c_idx - 1) / max(1, len(courses))) * 100)
@@ -429,7 +429,7 @@ class CourseMetadataScanner:
                 subjects = (s_json.get("data") if isinstance(s_json, dict) else None) or []
                 if not isinstance(subjects, list):
                     continue
-                self._log(f"Batch #{cid} ({cname}) -> {len(subjects)} folder(s)/subject(s)")
+                self._log(f"Batch #{cid} ({cname}) -> {len(subjects)} subject(s)")
 
                 for sub in subjects:
                     if self._should_stop(mode) or storage_full_hit:
@@ -476,7 +476,6 @@ class CourseMetadataScanner:
                             if not lid:
                                 continue
 
-                            # Save ONLY metadata; links will be fetched fresh 1-by-1 when Termux requests!
                             res = course_vault_db.upsert_lecture_metadata(
                                 cid, cname, sid, sname, tid, tname, lec
                             )
@@ -488,6 +487,8 @@ class CourseMetadataScanner:
                                     self.state["lectures_found"] += 1
                                     if res.get("is_new"):
                                         self.state["new_lectures_queued"] += 1
+                                    elif res.get("requeued"):
+                                        self.state["requeued_missing"] += 1
                                     else:
                                         self.state["existing_skipped"] += 1
 
@@ -509,8 +510,9 @@ class CourseMetadataScanner:
                     self.state["status"] = "COMPLETED"
                     self.state["progress_percent"] = 100
                     nq = self.state["new_lectures_queued"]
-                    self.state["current_phase"] = f"Done! {nq} class(es) indexed. Fresh links will be generated 1-by-1 for Termux."
-                    self._log(f"✅ Indexed {nq} new classes ({self.state['existing_skipped']} existing skipped). Zero link expiry!")
+                    rq = self.state["requeued_missing"]
+                    self.state["current_phase"] = f"Done! {nq} new + {rq} missing-asset class(es) queued."
+                    self._log(f"✅ Dual-Scan Done: {nq} new, {rq} re-queued (missing assets), {self.state['existing_skipped']} 100% complete skipped.")
         except Exception as e:
             with self._lock:
                 self.state["running"] = False
