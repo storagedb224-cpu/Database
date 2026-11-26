@@ -102,14 +102,12 @@ def api_cv_single_lecture(lecture_id):
     return jsonify({"status": "success", "lecture": doc})
 
 
-# ON-DEMAND 1-BY-1 FRESH LINK API FOR TERMUX (ZERO EXPIRY!)
 @app.route("/api/worker/next_lecture", methods=["GET"])
 def api_worker_next_lecture():
     doc = course_vault_db.claim_next_lecture_one_by_one()
     if not doc:
         return jsonify({"status": "success", "lecture": None}), 200
 
-    # Extract brand-new fresh video & PDF links right now!
     fresh = course_scanner.fetch_fresh_links_for_lecture(doc.get("course_id", ""), doc.get("lecture_id", ""))
     doc["source_video_url"] = fresh.get("source_video_url", "")
     doc["source_pdf1_url"] = fresh.get("source_pdf1_url", "")
@@ -182,6 +180,20 @@ def api_admin_course_delete():
     cid = str(data.get("course_id") or request.args.get("course_id") or "").strip()
     ok = course_vault_db.delete_course(cid)
     return jsonify({"status": "success" if ok else "error", "deleted_course_id": cid})
+
+
+@app.route("/api/admin/recheck", methods=["POST"])
+@require_admin
+def api_admin_recheck():
+    data = request.get_json(silent=True) or {}
+    cnt = course_vault_db.recheck_scope(
+        course_id=data.get("course_id", ""),
+        subject_id=data.get("subject_id", ""),
+        topic_id=data.get("topic_id", ""),
+        lecture_id=data.get("lecture_id", ""),
+        force_all=bool(data.get("force_all", False))
+    )
+    return jsonify({"status": "success", "requeued_count": cnt})
 
 
 @app.route("/api/admin/queue/clear", methods=["POST"])
