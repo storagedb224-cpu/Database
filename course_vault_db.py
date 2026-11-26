@@ -272,7 +272,6 @@ class CourseVaultDB:
         return True
 
     def clear_pending_queue(self, course_id=""):
-        """Clears pending, processing, and failed queue items so a fresh scan can start cleanly."""
         deleted = 0
         q = {"status": {"$in": ["pending", "processing", "failed"]}}
         if course_id:
@@ -301,7 +300,7 @@ class CourseVaultDB:
                 for row in entry["db"].lectures.find({}, {"course_id": 1, "status": 1, "yt_video_id": 1}):
                     cid = str(row.get("course_id") or "")
                     total_map[cid] = total_map.get(cid, 0) + 1
-                    if row.get("status") == "completed" or row.get("yt_video_id"):
+                    if row.get("status") == "completed" and row.get("yt_video_id"):
                         ready_map[cid] = ready_map.get(cid, 0) + 1
                     else:
                         pending_map[cid] = pending_map.get(cid, 0) + 1
@@ -416,14 +415,30 @@ class CourseVaultDB:
         ram_cache.set(key, docs, ttl_sec=60)
         return docs
 
+    def _is_lecture_missing_assets(self, doc, raw_thumb="", has_pdf1=False, has_pdf2=False):
+        """Checks MongoDB doc for missing video, thumbnail, pdf1, or pdf2."""
+        if not doc:
+            return True
+        if not str(doc.get("yt_video_id") or "").strip():
+            return True
+        if raw_thumb and not str(doc.get("drive_thumb_id") or "").strip():
+            return True
+        if has_pdf1 and not str(doc.get("drive_pdf1_id") or "").strip():
+            return True
+        if has_pdf2 and not str(doc.get("drive_pdf2_id") or "").strip():
+            return True
+        return False
+
     def upsert_lecture_metadata(self, course_id, course_name, subject_id, subject_name, topic_id, topic_name, lec_obj):
         lid = str(lec_obj.get("id") or lec_obj.get("lecture_id") or "").strip()
         if not lid:
             return {"ok": False, "reason": "missing_id"}
 
         existing_shard = self._find_lecture_shard(lid)
+        existing_doc = None
         if existing_shard:
             target_shard = existing_shard
+            existing_doc = existing_shard["db"].lectures.find_one({"lecture_id": lid})
             is_new = False
         else:
             target_shard = self.pick_best_shard()
@@ -432,6 +447,8 @@ class CourseVaultDB:
             is_new = True
 
         raw_thumb = str(lec_obj.get("thumbnail") or "").replace("\\/", "/").strip()
+        has_pdf1 = bool(str(lec_obj.get("pdf_link") or lec_obj.get("ypdf_link") or "").strip())
+        has_pdf2 = bool(str(lec_obj.get("pdf_link2") or "").strip())
         now_str = now_ist_str()
 
         set_fields = {
@@ -449,6 +466,15 @@ class CourseVaultDB:
             "db_shard": target_shard["label"],
             "updated_at": now_str
         }
+
+        requeued = False
+        if existing_doc:
+            # Dual check: if any asset (video/thumb/pdf1/pdf2) is missing in MongoDB, re-queue instead of skipping!
+            if existing_doc.get("status") != "processing" and self._is_lecture_missing_assets(existing_doc, raw_thumb, has_pdf1, has_pdf2):
+                set_fields["status"] = "pending"
+                set_fields["error_message"] = ""
+                requeued = True
+
         on_insert = {
             "status": "pending",
             "source_video_url": "",
@@ -473,7 +499,42 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix(f"cv_lectures:{course_id}:{subject_id}:{topic_id}")
         ram_cache.invalidate_prefix(f"cv_lec:{lid}")
         ram_cache.invalidate_prefix("cv_summary")
-        return {"ok": True, "is_new": is_new, "shard": target_shard["label"]}
+        return {"ok": True, "is_new": is_new, "requeued": requeued, "shard": target_shard["label"]}
+
+    def recheck_scope(self, course_id="", subject_id="", topic_id="", lecture_id="", force_all=False):
+        """Admin Panel Folder/Course/Subject/Topic/Lecture Recheck."""
+        q = {}
+        if lecture_id:
+            q["lecture_id"] = str(lecture_id).strip()
+        else:
+            if course_id:
+                q["course_id"] = str(course_id).strip()
+            if subject_id:
+                q["subject_id"] = str(subject_id).strip()
+            if topic_id:
+                q["topic_id"] = str(topic_id).strip()
+
+        if not force_all and not lecture_id:
+            # Only re-queue items that are missing video/thumb/pdf or failed/incomplete
+            q["$or"] = [
+                {"yt_video_id": {"$in": ["", None]}},
+                {"drive_thumb_id": {"$in": ["", None]}},
+                {"drive_pdf1_id": {"$in": ["", None]}},
+                {"status": {"$in": ["failed", "processing"]}}
+            ]
+
+        count = 0
+        for entry in self.dbs:
+            try:
+                res = entry["db"].lectures.update_many(
+                    q,
+                    {"$set": {"status": "pending", "error_message": "", "updated_at": now_ist_str()}}
+                )
+                count += res.modified_count
+            except Exception:
+                continue
+        ram_cache.invalidate_prefix("cv_")
+        return count
 
     def claim_next_lecture_one_by_one(self):
         for entry in self.dbs:
