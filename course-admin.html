@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <title>RWA Course Vault Admin | Token Verify, Scan, Stop & Clear Queue</title>
+    <title>RWA Course Vault Admin | Dual-Scan, Folder Recheck & Queue Control</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -44,7 +44,6 @@
 </head>
 <body class="p-3 sm:p-6">
 
-    <!-- TOAST -->
     <div id="cvToastBox" class="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-xs w-full pointer-events-none"></div>
 
     <!-- LOCK SCREEN -->
@@ -54,7 +53,7 @@
             <div>
                 <span class="px-3 py-1 rounded-full bg-sky-100 text-sky-900 text-[10px] font-black uppercase">Zero-Cost Streaming Vault</span>
                 <h1 class="text-2xl font-black mt-2">RWA COURSE VAULT ADMIN</h1>
-                <p class="text-xs font-bold opacity-70 mt-1">Verify Token → Pick Course → Scan / Stop / Clear Queue</p>
+                <p class="text-xs font-bold opacity-70 mt-1">Dual-Scan (Server + DB) • Folder Recheck • Queue Control</p>
             </div>
             <div class="text-left space-y-2">
                 <label class="text-xs font-extrabold opacity-80">Course Vault Render URL</label>
@@ -101,7 +100,6 @@
             </div>
             <div id="cvTokensList" class="flex flex-wrap gap-2 text-xs"></div>
 
-            <!-- VERIFIED PURCHASED COURSES LIST -->
             <div id="verifiedCoursesWrap" class="hidden pt-3 border-t border-sky-200 space-y-3">
                 <h4 id="verifiedCoursesTitle" class="font-black text-sm text-emerald-700">✅ Purchased Courses</h4>
                 <div id="verifiedCoursesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
@@ -126,10 +124,10 @@
                 <div class="flex flex-wrap justify-between items-center gap-2">
                     <div>
                         <div class="flex items-center gap-2">
-                            <h3 class="font-black text-sm">🤖 Course Metadata Scanner (Render)</h3>
+                            <h3 class="font-black text-sm">🤖 Course Dual-Scanner (Server + MongoDB)</h3>
                             <span id="cvScanPill" class="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black">IDLE</span>
                         </div>
-                        <p class="text-[11px] font-bold opacity-65">On-Demand Fresh Links (1-by-1) • Stop ya Clear Queue kabhi bhi karein</p>
+                        <p class="text-[11px] font-bold opacity-65">Missing Thumbnail / PDF / Video automatically re-queue hota hai</p>
                     </div>
                     <div class="flex gap-2">
                         <button id="cvStartScanBtn" onclick="startCourseScan('')" class="btn-p px-4 py-2 text-xs">🚀 Scan All</button>
@@ -143,7 +141,7 @@
                 <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
                     <div id="cvScanBar" class="h-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all" style="width:0%"></div>
                 </div>
-                <div id="cvScanStatsRow" class="text-[11px] font-bold opacity-75">Batches: 0/0 • New Queued: 0 • Skipped: 0</div>
+                <div id="cvScanStatsRow" class="text-[11px] font-bold opacity-75">Batches: 0/0 • New: 0 • Missing Re-queued: 0 • Skipped: 0</div>
                 <div id="cvScanLogs" class="text-[11px] font-mono bg-slate-900 text-emerald-300 p-3 rounded-xl max-h-36 overflow-y-auto space-y-0.5">
                     <div class="opacity-60">Live scanner logs yahan dikhenge...</div>
                 </div>
@@ -160,7 +158,7 @@
             <div id="cvShardsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
         </div>
 
-        <!-- WEBSITE-MIRROR COURSE EXPLORER -->
+        <!-- WEBSITE-MIRROR COURSE EXPLORER WITH FOLDER RECHECK -->
         <div class="glass rounded-2xl p-5 space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-3 border-b border-sky-200 pb-3">
                 <div class="flex items-center gap-2.5 min-w-0">
@@ -170,7 +168,10 @@
                         <h3 id="cvMirrorHeading" class="font-black text-base truncate">🎓 All Archived Batches (Website Mirror)</h3>
                     </div>
                 </div>
-                <input id="cvMirrorSearch" type="text" oninput="filterCvMirror()" placeholder="🔍 Search batch / subject / class..." class="inp max-w-xs">
+                <div class="flex items-center gap-2 flex-wrap">
+                    <button id="cvFolderRecheckBtn" onclick="recheckCurrentFolder()" class="hidden px-3 py-2 rounded-xl bg-teal-600 text-white font-black text-xs border-0 cursor-pointer">🔄 Recheck This Folder</button>
+                    <input id="cvMirrorSearch" type="text" oninput="filterCvMirror()" placeholder="🔍 Search batch / subject / class..." class="inp max-w-xs">
+                </div>
             </div>
             <div id="cvMirrorGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
         </div>
@@ -340,7 +341,7 @@
                 const grid = document.getElementById("verifiedCoursesGrid");
                 wrap.classList.remove("hidden");
                 document.getElementById("verifiedCoursesTitle").textContent =
-                    `✅ ${r.data.user_name || "Account"} — ${courses.length} Purchased Course(s) (Click Start to Scan)`;
+                    `✅ ${r.data.user_name || "Account"} — ${courses.length} Purchased Course(s) (Click Start to Dual-Scan)`;
 
                 if (!courses.length) {
                     grid.innerHTML = `<div class="col-span-full p-4 rounded-xl bg-amber-50 text-amber-900 text-xs font-bold">Token valid hai, par is account mein koi purchased course nahi mila.</div>`;
@@ -391,6 +392,22 @@
             } else {
                 toast("Queue clear failed.", "error");
             }
+        }
+
+        async function recheckScopeApi(payload, label = "Folder") {
+            const r = await api("/api/admin/recheck", "POST", payload);
+            if (r.ok) {
+                toast(`🔄 ${label}: ${r.data.requeued_count || 0} class(es) re-queued for Termux!`, "success");
+                refreshAllCourseVault();
+            } else {
+                toast("Recheck failed.", "error");
+            }
+        }
+
+        function recheckCurrentFolder() {
+            if (cv.view === "subjects") recheckScopeApi({ course_id: cv.courseId }, cv.courseName);
+            else if (cv.view === "topics") recheckScopeApi({ course_id: cv.courseId, subject_id: cv.subjectId }, cv.subjectName);
+            else if (cv.view === "lectures") recheckScopeApi({ course_id: cv.courseId, subject_id: cv.subjectId, topic_id: cv.topicId }, cv.topicName);
         }
 
         async function deleteVaultCourse(courseId, courseName) {
@@ -477,7 +494,7 @@
             document.getElementById("cvScanPhase").textContent = sc.current_phase || "Ready";
             document.getElementById("cvScanPct").textContent = `${sc.progress_percent || 0}%`;
             document.getElementById("cvScanBar").style.width = `${sc.progress_percent || 0}%`;
-            document.getElementById("cvScanStatsRow").textContent = `Batches: ${sc.courses_done || 0}/${sc.courses_total || 0} • Subjects: ${sc.subjects_found || 0} • New Queued: ${sc.new_lectures_queued || 0} • Skipped: ${sc.existing_skipped || 0}`;
+            document.getElementById("cvScanStatsRow").textContent = `Batches: ${sc.courses_done || 0}/${sc.courses_total || 0} • New: ${sc.new_lectures_queued || 0} • Missing Re-queued: ${sc.requeued_missing || 0} • Skipped: ${sc.existing_skipped || 0}`;
             const lg = document.getElementById("cvScanLogs");
             if (lg && Array.isArray(sc.logs) && sc.logs.length) {
                 lg.innerHTML = sc.logs.map(x => `<div>${esc(x)}</div>`).join("");
@@ -487,6 +504,7 @@
         async function loadMirrorCourses() {
             cv.view = "courses";
             document.getElementById("cvMirrorBackBtn").classList.add("hidden");
+            document.getElementById("cvFolderRecheckBtn").classList.add("hidden");
             document.getElementById("cvMirrorCrumb").textContent = "Course Vault Root";
             document.getElementById("cvMirrorHeading").textContent = "🎓 All Archived Batches (Website Mirror)";
             const res = await fetch(`${cv.apiBase}/api/cv/courses`).then(r => r.json());
@@ -516,6 +534,7 @@
                             <button onclick="toggleBatchMode('${esc(c.course_id)}', '${isVaultMode ? "hls_live" : "vault_first"}')" class="flex-1 py-2 rounded-xl text-[11px] font-black border-0 cursor-pointer ${isVaultMode ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"}">
                                 ${isVaultMode ? "☁️ YT + Drive" : "📡 Live HLS"}
                             </button>
+                            <button onclick="recheckScopeApi({course_id:'${esc(c.course_id)}'}, '${safeName}')" class="px-2.5 py-2 rounded-xl bg-teal-600 text-white text-[11px] font-black border-0 cursor-pointer" title="Recheck Missing Items">🔄</button>
                             <button onclick="deleteVaultCourse('${esc(c.course_id)}', '${safeName}')" class="px-2.5 py-2 rounded-xl bg-rose-600 text-white text-[11px] font-black border-0 cursor-pointer" title="Remove Course">🗑</button>
                             <button onclick="openMirrorCourse('${esc(c.course_id)}', '${safeName}')" class="btn-p px-3 py-2 text-xs">Open →</button>
                         </div>
@@ -531,36 +550,52 @@
         async function openMirrorCourse(cid, cname) {
             cv.view = "subjects"; cv.courseId = cid; cv.courseName = cname;
             document.getElementById("cvMirrorBackBtn").classList.remove("hidden");
+            document.getElementById("cvFolderRecheckBtn").classList.remove("hidden");
             document.getElementById("cvMirrorCrumb").textContent = `Batch #${cid}`;
             document.getElementById("cvMirrorHeading").textContent = `📚 ${cname}`;
             const res = await fetch(`${cv.apiBase}/api/cv/subjects/${encodeURIComponent(cid)}`).then(r => r.json());
             const list = res.subjects || [];
-            document.getElementById("cvMirrorGrid").innerHTML = list.map(s => `
-                <div onclick="openMirrorSubject('${esc(s.subject_id)}', '${esc(s.subject_name).replace(/'/g, "")}')" class="cv-item glass p-4 rounded-2xl flex items-center gap-3 cursor-pointer">
-                    <img src="${esc(s.subject_logo || 'https://placehold.co/64x64/0284c7/ffffff?text=SUB')}" onerror="this.src='https://placehold.co/64x64/0284c7/ffffff?text=SUB'" class="w-14 h-14 rounded-xl object-cover shrink-0">
-                    <div class="min-w-0">
-                        <span class="px-2 py-0.5 rounded bg-sky-100 text-sky-900 text-[10px] font-black">SUB #${esc(s.subject_id)}</span>
-                        <h4 class="font-black text-sm mt-1 truncate">${esc(s.subject_name)}</h4>
-                        <div class="text-[11px] font-extrabold text-blue-600">Open Topics →</div>
+            document.getElementById("cvMirrorGrid").innerHTML = list.map(s => {
+                const sn = esc(s.subject_name).replace(/'/g, "");
+                return `
+                <div class="cv-item glass p-4 rounded-2xl flex items-center justify-between gap-3">
+                    <div onclick="openMirrorSubject('${esc(s.subject_id)}', '${sn}')" class="flex items-center gap-3 min-w-0 flex-1 cursor-pointer">
+                        <img src="${esc(s.subject_logo || 'https://placehold.co/64x64/0284c7/ffffff?text=SUB')}" onerror="this.src='https://placehold.co/64x64/0284c7/ffffff?text=SUB'" class="w-14 h-14 rounded-xl object-cover shrink-0">
+                        <div class="min-w-0">
+                            <span class="px-2 py-0.5 rounded bg-sky-100 text-sky-900 text-[10px] font-black">SUB #${esc(s.subject_id)}</span>
+                            <h4 class="font-black text-sm mt-1 truncate">${esc(s.subject_name)}</h4>
+                            <div class="text-[11px] font-extrabold text-blue-600">Open Topics →</div>
+                        </div>
                     </div>
-                </div>`).join("") || `<div class="col-span-full py-8 text-center text-xs font-bold opacity-65">No subjects saved yet.</div>`;
+                    <button onclick="recheckScopeApi({course_id:'${esc(cid)}', subject_id:'${esc(s.subject_id)}'}, '${sn}')" class="px-2.5 py-2 rounded-xl bg-teal-600 text-white text-xs font-black border-0 cursor-pointer shrink-0" title="Recheck Subject">🔄</button>
+                </div>`;
+            }).join("") || `<div class="col-span-full py-8 text-center text-xs font-bold opacity-65">No subjects saved yet.</div>`;
         }
 
         async function openMirrorSubject(sid, sname) {
             cv.view = "topics"; cv.subjectId = sid; cv.subjectName = sname;
+            document.getElementById("cvFolderRecheckBtn").classList.remove("hidden");
             document.getElementById("cvMirrorCrumb").textContent = `${cv.courseName} > Subject #${sid}`;
             document.getElementById("cvMirrorHeading").textContent = `📂 ${sname}`;
             const res = await fetch(`${cv.apiBase}/api/cv/topics/${encodeURIComponent(cv.courseId)}/${encodeURIComponent(sid)}`).then(r => r.json());
             const list = res.topics || [];
-            document.getElementById("cvMirrorGrid").innerHTML = list.map(t => `
-                <div onclick="openMirrorTopic('${esc(t.topic_id)}', '${esc(t.topic_name).replace(/'/g, "")}')" class="cv-item glass p-4 rounded-2xl flex justify-between items-center cursor-pointer">
-                    <div class="min-w-0"><span class="text-[10px] font-black text-blue-600">TOPIC #${esc(t.topic_id)}</span><h4 class="font-black text-sm truncate mt-0.5">📁 ${esc(t.topic_name)}</h4></div>
-                    <span class="btn-p px-3 py-1.5 text-xs shrink-0">Classes →</span>
-                </div>`).join("") || `<div class="col-span-full py-8 text-center text-xs font-bold opacity-65">No topics saved yet.</div>`;
+            document.getElementById("cvMirrorGrid").innerHTML = list.map(t => {
+                const tn = esc(t.topic_name).replace(/'/g, "");
+                return `
+                <div class="cv-item glass p-4 rounded-2xl flex justify-between items-center gap-2">
+                    <div onclick="openMirrorTopic('${esc(t.topic_id)}', '${tn}')" class="min-w-0 flex-1 cursor-pointer">
+                        <span class="text-[10px] font-black text-blue-600">TOPIC #${esc(t.topic_id)}</span>
+                        <h4 class="font-black text-sm truncate mt-0.5">📁 ${esc(t.topic_name)}</h4>
+                    </div>
+                    <button onclick="recheckScopeApi({course_id:'${esc(cv.courseId)}', subject_id:'${esc(sid)}', topic_id:'${esc(t.topic_id)}'}, '${tn}')" class="px-2.5 py-1.5 rounded-xl bg-teal-600 text-white text-xs font-black border-0 cursor-pointer shrink-0" title="Recheck Folder">🔄</button>
+                    <button onclick="openMirrorTopic('${esc(t.topic_id)}', '${tn}')" class="btn-p px-3 py-1.5 text-xs shrink-0">Classes →</button>
+                </div>`;
+            }).join("") || `<div class="col-span-full py-8 text-center text-xs font-bold opacity-65">No topics saved yet.</div>`;
         }
 
         async function openMirrorTopic(tid, tname) {
             cv.view = "lectures"; cv.topicId = tid; cv.topicName = tname;
+            document.getElementById("cvFolderRecheckBtn").classList.remove("hidden");
             document.getElementById("cvMirrorCrumb").textContent = `${cv.courseName} > ${cv.subjectName}`;
             document.getElementById("cvMirrorHeading").textContent = `🎬 ${tname}`;
             const res = await fetch(`${cv.apiBase}/api/cv/lectures/${encodeURIComponent(cv.courseId)}/${encodeURIComponent(cv.subjectId)}/${encodeURIComponent(tid)}`).then(r => r.json());
@@ -579,12 +614,13 @@
                             <div class="flex gap-1.5 flex-wrap text-[10px] font-black">
                                 <span class="px-2 py-0.5 rounded ${l.yt_video_id ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-500"}">🎬 ${l.yt_video_id ? "YT: " + esc(l.yt_video_id) : "No YT"}</span>
                                 <span class="px-2 py-0.5 rounded ${l.drive_pdf1_id ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}">📄 ${l.drive_pdf1_id ? "PDF1 Ready" : "No PDF1"}</span>
+                                <span class="px-2 py-0.5 rounded ${l.drive_pdf2_id ? "bg-teal-100 text-teal-800" : "bg-slate-100 text-slate-500"}">📄 ${l.drive_pdf2_id ? "PDF2 Ready" : "No PDF2"}</span>
                             </div>
                             ${l.error_message ? `<div class="text-[10px] font-bold text-rose-600">${esc(l.error_message)}</div>` : ""}
                         </div>
                         <div class="flex gap-2 pt-2 border-t border-sky-200/50">
-                            <button onclick='openOverrideModal(${JSON.stringify({id:l.lecture_id,title:l.title,yt:l.yt_video_id||"",p1:l.drive_pdf1_id||"",p2:l.drive_pdf2_id||"",th:l.drive_thumb_id||""})})' class="btn-p flex-1 py-1.5 text-xs">✏️ Edit Links</button>
-                            ${l.status === "failed" ? `<button onclick="retryAllFailedQueue('${esc(l.lecture_id)}')" class="px-3 py-1.5 rounded-xl bg-amber-500 text-white font-black text-xs border-0 cursor-pointer">🔄</button>` : ""}
+                            <button onclick='openOverrideModal(${JSON.stringify({id:l.lecture_id,title:l.title,yt:l.yt_video_id||"",p1:l.drive_pdf1_id||"",p2:l.drive_pdf2_id||"",th:l.drive_thumb_id||""})})' class="btn-p flex-1 py-1.5 text-xs">✏️ Edit</button>
+                            <button onclick="recheckScopeApi({lecture_id:'${esc(l.lecture_id)}', force_all:true}, 'Class #${esc(l.lecture_id)}')" class="px-3 py-1.5 rounded-xl bg-teal-600 text-white font-black text-xs border-0 cursor-pointer" title="Recheck & Re-queue">🔄 Recheck</button>
                         </div>
                     </div>`;
             }).join("") || `<div class="col-span-full py-8 text-center text-xs font-bold opacity-65">No lectures in this topic yet.</div>`;
