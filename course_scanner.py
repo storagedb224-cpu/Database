@@ -98,6 +98,15 @@ def resolve_pdf_url(enc_pdf, signed_pdf=""):
         return dec
     if signed_pdf and str(signed_pdf).startswith("http"):
         return str(signed_pdf).replace("\\/", "/").strip()
+    if signed_pdf and "URLPrefix=" in str(signed_pdf):
+        try:
+            b64 = str(signed_pdf).split("URLPrefix=")[1].split("&")[0].split("~")[0]
+            b64 += "=" * (-len(b64) % 4)
+            decoded = base64.b64decode(b64).decode("utf-8", errors="ignore").strip()
+            if decoded.startswith("http"):
+                return decoded
+        except Exception:
+            pass
     return dec or ""
 
 
@@ -117,7 +126,7 @@ def pick_best_video_url(item):
                         score += 50
                     elif "480" in qual or "/480p/" in u:
                         score += 35
-                    elif "1080" in qual:
+                    elif "1080" in qual or "/1080p/" in u:
                         score += 40
                     if ".m3u8" in u:
                         score += 20
@@ -161,6 +170,7 @@ class CourseMetadataScanner:
             "lectures_found": 0,
             "new_lectures_queued": 0,
             "requeued_missing": 0,
+            "db_audit_requeued": 0,
             "existing_skipped": 0,
             "errors": 0,
             "progress_percent": 0,
@@ -171,7 +181,7 @@ class CourseMetadataScanner:
         line = f"[{_now_ist().strftime('%I:%M:%S %p')}] {msg}"
         with self._lock:
             self.state["logs"].insert(0, line)
-            self.state["logs"] = self.state["logs"][:50]
+            self.state["logs"] = self.state["logs"][:60]
         print(f"🎓 [CourseScanner] {msg}")
 
     def _notify(self, text):
@@ -339,7 +349,10 @@ class CourseMetadataScanner:
             self.state["status"] = "RUNNING"
             self.state["mode"] = mode
             self.state["started_at"] = _now_ist_str()
-            self.state["current_phase"] = f"Dual-Scan (Server + DB) for Batch #{target_cid}..." if target_cid else "Fetching Purchased Batches..."
+            self.state["current_phase"] = (
+                f"Dual-Scan (YT + TG + Drive) for Batch #{target_cid}..."
+                if target_cid else "Fetching Purchased Batches (YT + TG + Drive)..."
+            )
 
             self._thread = threading.Thread(
                 target=self._worker,
@@ -347,7 +360,7 @@ class CourseMetadataScanner:
                 daemon=True
             )
             self._thread.start()
-            msg = f"Batch #{target_cid} Dual-Scan started!" if target_cid else f"Course {mode} Dual-Scan started!"
+            msg = f"Batch #{target_cid} Dual-Scan (YT + TG) started!" if target_cid else f"Course {mode} Dual-Scan (YT + TG) started!"
             return True, msg
 
     def stop_scan(self):
@@ -364,11 +377,48 @@ class CourseMetadataScanner:
             return True
         return False
 
+    def _audit_course_db_missing(self, course_id):
+        """MongoDB-side audit: catches any archived class in DB that is missing YT, Drive, or TG assets."""
+        requeued_db = 0
+        cid = str(course_id or "").strip()
+        if not cid:
+            return 0
+        for entry in course_vault_db.dbs:
+            try:
+                cursor = entry["db"].lectures.find({"course_id": cid})
+                for doc in cursor:
+                    if doc.get("status") == "processing":
+                        continue
+                    any_miss, yt_miss, tg_miss = course_vault_db._is_lecture_missing_assets(
+                        doc,
+                        cid,
+                        subject_id=str(doc.get("subject_id") or ""),
+                        raw_thumb=str(doc.get("source_thumb") or ""),
+                        has_pdf1=bool(doc.get("has_pdf1")),
+                        has_pdf2=bool(doc.get("has_pdf2"))
+                    )
+                    if any_miss and doc.get("status") != "pending":
+                        upd = {
+                            "status": "pending",
+                            "error_message": "",
+                            "next_retry_ts": 0,
+                            "updated_at": _now_ist_str()
+                        }
+                        if yt_miss:
+                            upd["yt_status"] = "pending"
+                        if tg_miss:
+                            upd["tg_status"] = "pending"
+                        entry["db"].lectures.update_one({"_id": doc["_id"]}, {"$set": upd})
+                        requeued_db += 1
+            except Exception:
+                continue
+        return requeued_db
+
     def _worker(self, mode, tokens, target_course_id=""):
-        """Dual-Scan: Checks both RWA Server and MongoDB; re-queues any lecture missing thumb/pdf/video."""
+        """Dual-Scan: Checks RWA Server + MongoDB for YT, Drive, and Telegram completeness."""
         storage_full_hit = False
         try:
-            self._log(f"Started {mode.upper()} Dual-Scan (Server + MongoDB, target={target_course_id or 'ALL'})...")
+            self._log(f"Started {mode.upper()} Dual-Scan (YT + Drive + TG, target={target_course_id or 'ALL'})...")
             courses = []
             seen_cids = set()
 
@@ -419,6 +469,12 @@ class CourseMetadataScanner:
                 cname = str(c_obj.get("course_name") or f"Batch #{cid}").strip()
                 uid, tok = tk["user_id"], tk["token"]
 
+                eff = course_vault_db._effective_course_config(cid)
+                self._log(
+                    f"Batch #{cid} ({cname}) | Mode: {eff['upload_mode'].upper()} | "
+                    f"TG Channel: {eff['tg_channel_id'] or 'Not Set'}"
+                )
+
                 with self._lock:
                     self.state["current_phase"] = f"Dual-Scan Batch {c_idx}/{len(courses)}: {cname}"
                     self.state["current_course"] = f"{cname} (#{cid})"
@@ -429,7 +485,7 @@ class CourseMetadataScanner:
                 subjects = (s_json.get("data") if isinstance(s_json, dict) else None) or []
                 if not isinstance(subjects, list):
                     continue
-                self._log(f"Batch #{cid} ({cname}) -> {len(subjects)} subject(s)")
+                self._log(f"Batch #{cid} -> {len(subjects)} subject(s)")
 
                 for sub in subjects:
                     if self._should_stop(mode) or storage_full_hit:
@@ -492,6 +548,14 @@ class CourseMetadataScanner:
                                     else:
                                         self.state["existing_skipped"] += 1
 
+                # DB-side audit for any previously stored classes missing YT or TG
+                if not self._should_stop(mode) and not storage_full_hit:
+                    db_rq = self._audit_course_db_missing(cid)
+                    if db_rq:
+                        with self._lock:
+                            self.state["db_audit_requeued"] += db_rq
+                        self._log(f"🔎 MongoDB Audit Batch #{cid}: {db_rq} missing YT/TG class(es) re-queued.")
+
                 with self._lock:
                     self.state["courses_done"] = c_idx
                     self.state["progress_percent"] = int((c_idx / max(1, len(courses))) * 100)
@@ -502,6 +566,7 @@ class CourseMetadataScanner:
                 if storage_full_hit:
                     self.state["status"] = "PAUSED_STORAGE_FULL"
                     self.state["current_phase"] = f"Paused: All Course DBs hit {config.MAX_COURSE_DB_SIZE_MB} MB limit!"
+                    self._notify(f"🚨 <b>Course Vault Storage Full!</b> All DBs reached {config.MAX_COURSE_DB_SIZE_MB} MB.")
                 elif self._stop_flag:
                     self.state["status"] = "STOPPED"
                     self.state["current_phase"] = "Process Stopped by Admin"
@@ -510,9 +575,10 @@ class CourseMetadataScanner:
                     self.state["status"] = "COMPLETED"
                     self.state["progress_percent"] = 100
                     nq = self.state["new_lectures_queued"]
-                    rq = self.state["requeued_missing"]
-                    self.state["current_phase"] = f"Done! {nq} new + {rq} missing-asset class(es) queued."
-                    self._log(f"✅ Dual-Scan Done: {nq} new, {rq} re-queued (missing assets), {self.state['existing_skipped']} 100% complete skipped.")
+                    rq = self.state["requeued_missing"] + self.state["db_audit_requeued"]
+                    sk = self.state["existing_skipped"]
+                    self.state["current_phase"] = f"Done! {nq} new + {rq} missing YT/TG re-queued ({sk} complete skipped)."
+                    self._log(f"✅ Dual-Scan Done: {nq} new, {rq} re-queued (missing YT/Drive/TG), {sk} 100% complete skipped.")
         except Exception as e:
             with self._lock:
                 self.state["running"] = False
