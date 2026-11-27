@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
     <meta name="theme-color" content="#0284c7">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>RWA Sky Pro Portal - Courses, OTT Player & Live TCS CBT Test Series</title>
     <link rel="manifest" href="manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -27,6 +28,35 @@
                  url('https://static-appxdb-v2.akamai.net.in/fonts/kokila.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
+        }
+
+        /* RWA HD Player: 100% Transparent Auto-Hide Layer & Proper Z-Index Stack */
+        #hlsScreen {
+            position: relative;
+            background: #000;
+            overflow: hidden;
+        }
+        #ytAntiLeakShield {
+            background: transparent !important;
+        }
+        #playerControlsBar {
+            z-index: 15 !important;
+            transition: opacity 0.25s ease, visibility 0.25s ease !important;
+        }
+        #playerControlsBar.hidden-controls {
+            opacity: 0 !important;
+            visibility: hidden !important;
+            background: transparent !important;
+            pointer-events: none !important;
+        }
+        #bufferLoader, #gestureHud, #rippleLeft, #rippleRight {
+            z-index: 18 !important;
+        }
+        #audioOnlyBanner, #screenUnlockOverlay, #autoPlayOverlay {
+            z-index: 22 !important;
+        }
+        #settingsMenu {
+            z-index: 28 !important;
         }
     </style>
 </head>
@@ -294,7 +324,7 @@
                                     </div>
                                     <div class="sett-section">
                                         <div class="sett-title">🎬 Video Quality</div>
-                                        <div id="qualityList" class="sett-options"><div class="q-option active">720p</div></div>
+                                        <div id="qualityList" class="sett-options"><div class="q-option active">1080p HD</div></div>
                                     </div>
                                     <div class="sett-section mt-2">
                                         <div class="sett-title">⚡ Speed</div>
@@ -357,7 +387,7 @@
                             </div>
 
                             <div id="ytScreen" class="screen hidden aspect-video">
-                                <iframe id="ytFrame" class="w-full h-full" src="" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+                                <iframe id="ytFrame" class="w-full h-full" src="" frameborder="0" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
                             </div>
 
                             <div class="flex flex-wrap justify-between items-center gap-2 mt-2 px-1 text-[11px] font-bold opacity-80">
@@ -836,7 +866,7 @@
 
     <script src="rwa-security.js"></script>
     <script src="pro-suite.js"></script>
-    <script src="player_2.js"></script>
+    <script src="player_2.js?v=hd153"></script>
     <script src="app.js"></script>
     <script src="tcs-engine.js"></script>
 </body>
