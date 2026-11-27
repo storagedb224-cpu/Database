@@ -111,6 +111,7 @@ def resolve_pdf_url(enc_pdf, signed_pdf=""):
 
 
 def pick_best_video_url(item):
+    """Always prioritizes highest True HD source: 1080p -> 720p -> 480p -> 360p."""
     candidates = []
     for key in ("encrypted_links", "livestream_links", "download_links"):
         arr = item.get(key) or []
@@ -121,21 +122,30 @@ def pick_best_video_url(item):
                 u = decrypt_appx_str(str(entry.get("path") or ""))
                 if u.startswith("http") and "playlist_eof.m3u8" not in u:
                     qual = str(entry.get("quality") or "").lower()
-                    score = 0
-                    if "720" in qual or "/720p/" in u:
-                        score += 50
-                    elif "480" in qual or "/480p/" in u:
-                        score += 35
-                    elif "1080" in qual or "/1080p/" in u:
-                        score += 40
-                    if ".m3u8" in u:
-                        score += 20
+                    u_low = u.lower()
+                    score = 10
+                    if "1080" in qual or "1080p" in u_low or "fhd" in qual:
+                        score = 90
+                    elif "720" in qual or "720p" in u_low or "hd" in qual:
+                        score = 70
+                    elif "480" in qual or "480p" in u_low:
+                        score = 45
+                    elif "360" in qual or "360p" in u_low:
+                        score = 25
+                    elif "240" in qual or "240p" in u_low:
+                        score = 12
+                    if "master.m3u8" in u_low:
+                        score += 15
+                    elif ".m3u8" in u_low:
+                        score += 10
+                    elif ".mp4" in u_low:
+                        score += 8
                     candidates.append((score, u))
 
     dec_file = decrypt_appx_str(str(item.get("file_link") or ""))
     if dec_file:
         if dec_file.startswith("http") and "playlist_eof.m3u8" not in dec_file:
-            candidates.append((25, dec_file))
+            candidates.append((30, dec_file))
         elif not dec_file.startswith("http") and 10 <= len(dec_file) <= 15:
             candidates.append((10, dec_file))
 
@@ -158,6 +168,7 @@ class CourseMetadataScanner:
             "running": False,
             "status": "IDLE",
             "mode": "none",
+            "scan_target": "both",
             "started_at": "",
             "finished_at": "",
             "current_phase": "Token verify karke course select karein",
@@ -181,7 +192,7 @@ class CourseMetadataScanner:
         line = f"[{_now_ist().strftime('%I:%M:%S %p')}] {msg}"
         with self._lock:
             self.state["logs"].insert(0, line)
-            self.state["logs"] = self.state["logs"][:60]
+            self.state["logs"] = self.state["logs"][:70]
         print(f"🎓 [CourseScanner] {msg}")
 
     def _notify(self, text):
@@ -324,7 +335,10 @@ class CourseMetadataScanner:
             "message": f"Token Verified ({user_name})! {len(courses)} purchased course(s) mile."
         }
 
-    def start_scan(self, mode="manual", target_course_id="", override_token=None):
+    def start_scan(self, mode="manual", target_course_id="", override_token=None, scan_target="both"):
+        clean_target = scan_target if scan_target in ("both", "only_yt", "only_tg") else "both"
+        target_label = {"both": "YT + TG", "only_yt": "ONLY YT", "only_tg": "ONLY TG"}[clean_target]
+
         with self._lock:
             if self.state["running"]:
                 return False, "Course metadata scan pehle se chal raha hai!"
@@ -348,19 +362,23 @@ class CourseMetadataScanner:
             self.state["running"] = True
             self.state["status"] = "RUNNING"
             self.state["mode"] = mode
+            self.state["scan_target"] = clean_target
             self.state["started_at"] = _now_ist_str()
             self.state["current_phase"] = (
-                f"Dual-Scan (YT + TG + Drive) for Batch #{target_cid}..."
-                if target_cid else "Fetching Purchased Batches (YT + TG + Drive)..."
+                f"[{target_label}] Scanning Batch #{target_cid}..."
+                if target_cid else f"[{target_label}] Fetching Purchased Batches..."
             )
 
             self._thread = threading.Thread(
                 target=self._worker,
-                args=(mode, tokens, target_cid),
+                args=(mode, tokens, target_cid, clean_target),
                 daemon=True
             )
             self._thread.start()
-            msg = f"Batch #{target_cid} Dual-Scan (YT + TG) started!" if target_cid else f"Course {mode} Dual-Scan (YT + TG) started!"
+            msg = (
+                f"[{target_label}] Batch #{target_cid} Scan started!"
+                if target_cid else f"[{target_label}] {mode.upper()} Scan started!"
+            )
             return True, msg
 
     def stop_scan(self):
@@ -377,16 +395,15 @@ class CourseMetadataScanner:
             return True
         return False
 
-    def _audit_course_db_missing(self, course_id):
-        """MongoDB-side audit: catches any archived class in DB that is missing YT, Drive, or TG assets."""
+    def _audit_course_db_missing(self, course_id, scan_target="both"):
+        """MongoDB audit: re-queues missing classes for the chosen scan_target (both / only_yt / only_tg)."""
         requeued_db = 0
         cid = str(course_id or "").strip()
         if not cid:
             return 0
         for entry in course_vault_db.dbs:
             try:
-                cursor = entry["db"].lectures.find({"course_id": cid})
-                for doc in cursor:
+                for doc in entry["db"].lectures.find({"course_id": cid}):
                     if doc.get("status") == "processing":
                         continue
                     any_miss, yt_miss, tg_miss = course_vault_db._is_lecture_missing_assets(
@@ -395,7 +412,8 @@ class CourseMetadataScanner:
                         subject_id=str(doc.get("subject_id") or ""),
                         raw_thumb=str(doc.get("source_thumb") or ""),
                         has_pdf1=bool(doc.get("has_pdf1")),
-                        has_pdf2=bool(doc.get("has_pdf2"))
+                        has_pdf2=bool(doc.get("has_pdf2")),
+                        scan_target=scan_target
                     )
                     if any_miss and doc.get("status") != "pending":
                         upd = {
@@ -414,11 +432,11 @@ class CourseMetadataScanner:
                 continue
         return requeued_db
 
-    def _worker(self, mode, tokens, target_course_id=""):
-        """Dual-Scan: Checks RWA Server + MongoDB for YT, Drive, and Telegram completeness."""
+    def _worker(self, mode, tokens, target_course_id="", scan_target="both"):
         storage_full_hit = False
+        target_label = {"both": "YT + TG", "only_yt": "ONLY YT", "only_tg": "ONLY TG"}.get(scan_target, "YT + TG")
         try:
-            self._log(f"Started {mode.upper()} Dual-Scan (YT + Drive + TG, target={target_course_id or 'ALL'})...")
+            self._log(f"Started {mode.upper()} Scan [{target_label}] (target={target_course_id or 'ALL'})...")
             courses = []
             seen_cids = set()
 
@@ -451,7 +469,7 @@ class CourseMetadataScanner:
 
             with self._lock:
                 self.state["courses_total"] = len(courses)
-            self._log(f"Selected {len(courses)} batch(es) for Dual-Scan.")
+            self._log(f"Selected {len(courses)} batch(es) for [{target_label}] Scan.")
 
             if not courses:
                 with self._lock:
@@ -471,12 +489,12 @@ class CourseMetadataScanner:
 
                 eff = course_vault_db._effective_course_config(cid)
                 self._log(
-                    f"Batch #{cid} ({cname}) | Mode: {eff['upload_mode'].upper()} | "
-                    f"TG Channel: {eff['tg_channel_id'] or 'Not Set'}"
+                    f"Batch #{cid} ({cname}) | Scan: {target_label} | Course Mode: {eff['upload_mode'].upper()} | "
+                    f"TG CH: {eff['tg_channel_id'] or 'Not Set'}"
                 )
 
                 with self._lock:
-                    self.state["current_phase"] = f"Dual-Scan Batch {c_idx}/{len(courses)}: {cname}"
+                    self.state["current_phase"] = f"[{target_label}] Batch {c_idx}/{len(courses)}: {cname}"
                     self.state["current_course"] = f"{cname} (#{cid})"
                     self.state["courses_done"] = c_idx - 1
                     self.state["progress_percent"] = int(((c_idx - 1) / max(1, len(courses))) * 100)
@@ -533,7 +551,7 @@ class CourseMetadataScanner:
                                 continue
 
                             res = course_vault_db.upsert_lecture_metadata(
-                                cid, cname, sid, sname, tid, tname, lec
+                                cid, cname, sid, sname, tid, tname, lec, scan_target=scan_target
                             )
                             if res.get("storage_full"):
                                 storage_full_hit = True
@@ -548,13 +566,12 @@ class CourseMetadataScanner:
                                     else:
                                         self.state["existing_skipped"] += 1
 
-                # DB-side audit for any previously stored classes missing YT or TG
                 if not self._should_stop(mode) and not storage_full_hit:
-                    db_rq = self._audit_course_db_missing(cid)
+                    db_rq = self._audit_course_db_missing(cid, scan_target=scan_target)
                     if db_rq:
                         with self._lock:
                             self.state["db_audit_requeued"] += db_rq
-                        self._log(f"🔎 MongoDB Audit Batch #{cid}: {db_rq} missing YT/TG class(es) re-queued.")
+                        self._log(f"🔎 MongoDB Audit Batch #{cid} [{target_label}]: {db_rq} missing class(es) re-queued.")
 
                 with self._lock:
                     self.state["courses_done"] = c_idx
@@ -577,8 +594,8 @@ class CourseMetadataScanner:
                     nq = self.state["new_lectures_queued"]
                     rq = self.state["requeued_missing"] + self.state["db_audit_requeued"]
                     sk = self.state["existing_skipped"]
-                    self.state["current_phase"] = f"Done! {nq} new + {rq} missing YT/TG re-queued ({sk} complete skipped)."
-                    self._log(f"✅ Dual-Scan Done: {nq} new, {rq} re-queued (missing YT/Drive/TG), {sk} 100% complete skipped.")
+                    self.state["current_phase"] = f"[{target_label}] Done! {nq} new + {rq} missing re-queued ({sk} complete skipped)."
+                    self._log(f"✅ [{target_label}] Scan Done: {nq} new, {rq} re-queued, {sk} complete skipped.")
         except Exception as e:
             with self._lock:
                 self.state["running"] = False
