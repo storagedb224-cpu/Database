@@ -6,11 +6,44 @@ from datetime import datetime, timezone, timedelta
 from pymongo import MongoClient, DESCENDING
 import config
 
+try:
+    from zoneinfo import ZoneInfo
+    PT_TZ = ZoneInfo("America/Los_Angeles")
+except Exception:
+    PT_TZ = timezone(timedelta(hours=-8))
+
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def now_ist_str():
     return datetime.now(IST).strftime("%d-%m-%Y %I:%M:%S %p")
+
+
+def ts_to_ist_str(ts):
+    if not ts or int(ts) <= 0:
+        return "--"
+    return datetime.fromtimestamp(int(ts), IST).strftime("%d-%m-%Y %I:%M:%S %p IST")
+
+
+def current_pt_date_str():
+    return datetime.now(PT_TZ).strftime("%Y-%m-%d")
+
+
+def get_next_yt_api_quota_reset():
+    """YouTube Data API v3 daily quota resets at 00:00 Pacific Time (PT)."""
+    now_pt = datetime.now(PT_TZ)
+    next_midnight_pt = (now_pt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    next_ist = next_midnight_pt.astimezone(IST)
+    rem_sec = max(0, int((next_midnight_pt - now_pt).total_seconds()))
+    hrs = rem_sec // 3600
+    mins = (rem_sec % 3600) // 60
+    return {
+        "pt_date": now_pt.strftime("%Y-%m-%d"),
+        "reset_ts": int(next_midnight_pt.timestamp()),
+        "reset_ist": next_ist.strftime("%d-%m-%Y %I:%M %p IST"),
+        "remaining_sec": rem_sec,
+        "remaining_text": f"{hrs}h {mins}m"
+    }
 
 
 def _clean_doc(doc):
@@ -51,7 +84,7 @@ DEFAULT_SETTINGS = {
         "admin_chat_ids": "",
         "global_upload_mode": "both",
         "auto_forward_master": True,
-        "auto_pinned_index": True,
+        "topic_pinned_index": True,
         "sequential_indexing": True
     },
     "captions": {
@@ -85,13 +118,6 @@ DEFAULT_SETTINGS = {
             {"text": "📢 Join Main Channel", "url": ""}
         ]
     },
-    "watermark": {
-        "enabled": False,
-        "text": "RWB",
-        "sub_text": "",
-        "opacity": 0.18,
-        "color": "#64748b"
-    },
     "size_guard": {
         "enabled": True,
         "max_mb": 1950,
@@ -99,6 +125,8 @@ DEFAULT_SETTINGS = {
     },
     "worker_control": {
         "state": "RUNNING",
+        "yt_worker_enabled": True,
+        "tg_worker_enabled": True,
         "skip_lecture_id": "",
         "download_threads": 12,
         "storage_guard_enabled": True,
@@ -118,10 +146,6 @@ DEFAULT_SETTINGS = {
         "backup_interval_hours": 24,
         "last_backup_ts": 0,
         "uploads_since_backup": 0
-    },
-    "portal_fallback": {
-        "tg_fallback_enabled": True,
-        "default_tg_invite_link": ""
     }
 }
 
@@ -130,11 +154,12 @@ def _deep_merge_defaults(stored):
     res = copy.deepcopy(DEFAULT_SETTINGS)
     if not isinstance(stored, dict):
         return res
-    for sec, sec_defaults in DEFAULT_SETTINGS.items():
+    for sec in DEFAULT_SETTINGS:
         val = stored.get(sec)
         if isinstance(val, dict):
             for k, v in val.items():
-                res[sec][k] = v
+                if k in res[sec]:
+                    res[sec][k] = v
     return res
 
 
@@ -240,6 +265,7 @@ class CourseVaultDB:
             db.lectures.create_index("tg_status")
             db.scanner_tokens.create_index("user_id", unique=True)
             db.tg_bots.create_index("bot_id", unique=True)
+            db.yt_channels.create_index("client_key", unique=True)
             db.restore_jobs.create_index("job_id", unique=True)
         except Exception:
             pass
@@ -288,7 +314,7 @@ class CourseVaultDB:
             except Exception:
                 pass
         merged = _deep_merge_defaults(stored)
-        ram_cache.set("cv_settings:master", merged, ttl_sec=15)
+        ram_cache.set("cv_settings:master", merged, ttl_sec=12)
         return copy.deepcopy(merged)
 
     def update_settings(self, patch):
@@ -298,7 +324,9 @@ class CourseVaultDB:
         current = self.get_all_settings()
         for sec, val in patch.items():
             if sec in DEFAULT_SETTINGS and isinstance(val, dict):
-                current[sec].update(val)
+                for k, v in val.items():
+                    if k in current[sec]:
+                        current[sec][k] = v
         current["updated_at"] = now_ist_str()
         primary["db"].vault_settings.update_one(
             {"_id": "master_config"},
@@ -322,19 +350,323 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix("cv_settings")
         return True
 
-    def set_worker_control(self, state=None, skip_lecture_id=None, download_threads=None):
+    def set_worker_control(
+        self, state=None, yt_worker_enabled=None, tg_worker_enabled=None,
+        skip_lecture_id=None, download_threads=None
+    ):
         wc = self.get_all_settings().get("worker_control", {})
         if state in ("RUNNING", "PAUSED"):
             wc["state"] = state
+        if yt_worker_enabled is not None:
+            wc["yt_worker_enabled"] = bool(yt_worker_enabled)
+        if tg_worker_enabled is not None:
+            wc["tg_worker_enabled"] = bool(tg_worker_enabled)
         if skip_lecture_id is not None:
             wc["skip_lecture_id"] = str(skip_lecture_id).strip()
         if download_threads is not None:
             try:
-                t = int(download_threads)
-                wc["download_threads"] = max(1, min(24, t))
+                wc["download_threads"] = max(1, min(24, int(download_threads)))
             except Exception:
                 pass
         return self.update_settings({"worker_control": wc})
+
+    # =========================================================
+    # YOUTUBE QUOTA, DAILY LIMIT & PER-CHANNEL ANALYTICS
+    # =========================================================
+    def update_yt_channel_meta(self, client_key, daily_limit_est=None, daily_quota_cap=None, channel_title=None):
+        primary = self.get_primary_db()
+        ck = str(client_key or "").strip()
+        if not primary or not ck:
+            return False
+        upd = {"updated_at": now_ist_str()}
+        if daily_limit_est is not None:
+            upd["daily_limit_est"] = max(1, int(daily_limit_est))
+        if daily_quota_cap is not None:
+            upd["daily_quota_cap"] = max(1600, int(daily_quota_cap))
+        if channel_title is not None and str(channel_title).strip():
+            upd["channel_title"] = str(channel_title).strip()
+        primary["db"].yt_channels.update_one(
+            {"client_key": ck},
+            {"$set": upd},
+            upsert=True
+        )
+        ram_cache.invalidate_prefix("cv_analytics")
+        return True
+
+    def record_yt_channel_event(
+        self, client_key, channel_id="", channel_title="", status="READY",
+        uploaded_bytes=0, error_msg="", hit_upload_limit=False, hit_api_quota=False
+    ):
+        primary = self.get_primary_db()
+        ck = str(client_key or "").strip()
+        if not primary or not ck:
+            return False
+
+        today_pt = current_pt_date_str()
+        now_ts = int(time.time())
+        doc = primary["db"].yt_channels.find_one({"client_key": ck}) or {}
+
+        today_uploads = int(doc.get("today_uploads", 0)) if doc.get("today_date_pt") == today_pt else 0
+        today_units = int(doc.get("today_quota_units", 0)) if doc.get("today_date_pt") == today_pt else 0
+        today_bytes = int(doc.get("today_bytes", 0)) if doc.get("today_date_pt") == today_pt else 0
+
+        if uploaded_bytes and uploaded_bytes > 0:
+            today_uploads += 1
+            today_units += 1600
+            today_bytes += int(uploaded_bytes)
+
+        set_fields = {
+            "client_key": ck,
+            "today_date_pt": today_pt,
+            "today_uploads": today_uploads,
+            "today_quota_units": today_units,
+            "today_bytes": today_bytes,
+            "status": status,
+            "last_error": str(error_msg or "")[:180],
+            "updated_at": now_ist_str(),
+            "last_event_ts": now_ts
+        }
+        if channel_id:
+            set_fields["channel_id"] = str(channel_id).strip()
+        if channel_title:
+            set_fields["channel_title"] = str(channel_title).strip()
+
+        if hit_upload_limit:
+            set_fields["status"] = "UPLOAD_LIMIT_FULL"
+            set_fields["limit_hit_ts"] = now_ts
+            set_fields["limit_resets_at_ts"] = now_ts + 86400
+        elif hit_api_quota:
+            set_fields["status"] = "API_QUOTA_FULL"
+            set_fields["quota_hit_ts"] = now_ts
+            set_fields["limit_resets_at_ts"] = get_next_yt_api_quota_reset()["reset_ts"]
+        elif status == "READY":
+            set_fields["last_error"] = ""
+
+        on_insert = {
+            "daily_limit_est": 15,
+            "daily_quota_cap": 10000,
+            "created_at": now_ist_str()
+        }
+        for k in list(set_fields.keys()):
+            on_insert.pop(k, None)
+
+        primary["db"].yt_channels.update_one(
+            {"client_key": ck},
+            {"$set": set_fields, "$setOnInsert": on_insert},
+            upsert=True
+        )
+        ram_cache.invalidate_prefix("cv_analytics")
+        return True
+
+    def get_channel_analytics(self):
+        """A-to-Z YouTube + Telegram Channel Analytics: daily uploads, quota renewal IST, per-channel videos & storage."""
+        cached = ram_cache.get("cv_analytics:full")
+        if cached is not None:
+            return cached
+
+        primary = self.get_primary_db()
+        quota_reset = get_next_yt_api_quota_reset()
+        today_pt = quota_reset["pt_date"]
+        now_ts = int(time.time())
+
+        # Course map for naming TG channels
+        course_map = {}
+        if primary:
+            try:
+                for c in primary["db"].courses.find({}, {"course_id": 1, "course_name": 1, "tg_channel_id": 1}):
+                    course_map[str(c.get("course_id"))] = {
+                        "name": c.get("course_name", ""),
+                        "tg_channel_id": str(c.get("tg_channel_id") or "")
+                    }
+            except Exception:
+                pass
+
+        # Scan lectures across all shards for exact per-YT-channel & per-TG-channel counts + storage
+        yt_lec_agg = {}
+        tg_lec_agg = {}
+        total_yt_bytes = 0
+        total_tg_bytes = 0
+        total_drive_bytes = 0
+        total_yt_videos = 0
+        total_tg_videos = 0
+        total_tg_pdfs = 0
+
+        for entry in self.dbs:
+            try:
+                proj = {
+                    "course_id": 1, "course_name": 1, "yt_video_id": 1,
+                    "yt_channel_key": 1, "yt_channel_title": 1,
+                    "tg_channel_id": 1, "tg_video_msg_id": 1,
+                    "tg_pdf1_msg_id": 1, "tg_pdf2_msg_id": 1,
+                    "video_size_bytes": 1, "pdf_size_bytes": 1
+                }
+                for d in entry["db"].lectures.find({}, proj):
+                    v_bytes = int(d.get("video_size_bytes") or 0)
+                    p_bytes = int(d.get("pdf_size_bytes") or 0)
+                    total_drive_bytes += p_bytes
+
+                    if d.get("yt_video_id"):
+                        total_yt_videos += 1
+                        total_yt_bytes += v_bytes
+                        ck = str(d.get("yt_channel_key") or "legacy_untracked")
+                        st = yt_lec_agg.setdefault(ck, {
+                            "client_key": ck,
+                            "channel_title": str(d.get("yt_channel_title") or ("Legacy / Untracked YT" if ck == "legacy_untracked" else ck)),
+                            "videos": 0,
+                            "bytes": 0,
+                            "courses": set()
+                        })
+                        st["videos"] += 1
+                        st["bytes"] += v_bytes
+                        if d.get("course_name"):
+                            st["courses"].add(str(d["course_name"]))
+
+                    tg_ch = str(d.get("tg_channel_id") or "").strip()
+                    has_tg_vid = bool(d.get("tg_video_msg_id"))
+                    p_cnt = (1 if d.get("tg_pdf1_msg_id") else 0) + (1 if d.get("tg_pdf2_msg_id") else 0)
+                    if has_tg_vid or p_cnt > 0:
+                        if has_tg_vid:
+                            total_tg_videos += 1
+                            total_tg_bytes += v_bytes
+                        total_tg_pdfs += p_cnt
+                        total_tg_bytes += p_bytes
+                        ch_key = tg_ch or "unknown_channel"
+                        tst = tg_lec_agg.setdefault(ch_key, {
+                            "channel_id": ch_key,
+                            "videos": 0,
+                            "pdfs": 0,
+                            "bytes": 0,
+                            "courses": set()
+                        })
+                        if has_tg_vid:
+                            tst["videos"] += 1
+                            tst["bytes"] += v_bytes
+                        tst["pdfs"] += p_cnt
+                        tst["bytes"] += p_bytes
+                        if d.get("course_name"):
+                            tst["courses"].add(str(d["course_name"]))
+            except Exception:
+                continue
+
+        # Merge stored yt_channels telemetry with aggregated counts
+        yt_channels_out = []
+        seen_keys = set()
+        if primary:
+            try:
+                for ch in primary["db"].yt_channels.find().sort("client_key", 1):
+                    ck = str(ch.get("client_key") or "")
+                    if not ck:
+                        continue
+                    seen_keys.add(ck)
+                    agg = yt_lec_agg.get(ck, {})
+                    same_day = (ch.get("today_date_pt") == today_pt)
+                    today_up = int(ch.get("today_uploads", 0)) if same_day else 0
+                    today_units = int(ch.get("today_quota_units", 0)) if same_day else 0
+                    today_b = int(ch.get("today_bytes", 0)) if same_day else 0
+                    daily_cap = int(ch.get("daily_quota_cap", 10000))
+                    daily_lim = int(ch.get("daily_limit_est", 15))
+                    resets_ts = int(ch.get("limit_resets_at_ts", 0))
+
+                    status = str(ch.get("status") or "READY")
+                    if status == "API_QUOTA_FULL" and not same_day:
+                        status = "READY"
+                    elif status == "UPLOAD_LIMIT_FULL" and resets_ts > 0 and now_ts >= resets_ts:
+                        status = "READY"
+
+                    rem_limit_sec = max(0, resets_ts - now_ts) if (status in ("UPLOAD_LIMIT_FULL", "API_QUOTA_FULL") and resets_ts > now_ts) else 0
+                    if status == "API_QUOTA_FULL":
+                        rem_limit_sec = quota_reset["remaining_sec"]
+                        next_renew_ist = quota_reset["reset_ist"]
+                    elif status == "UPLOAD_LIMIT_FULL" and resets_ts > now_ts:
+                        next_renew_ist = ts_to_ist_str(resets_ts)
+                    else:
+                        next_renew_ist = quota_reset["reset_ist"]
+
+                    rh, rm = rem_limit_sec // 3600, (rem_limit_sec % 3600) // 60
+                    yt_channels_out.append({
+                        "client_key": ck,
+                        "channel_id": ch.get("channel_id", ""),
+                        "channel_title": ch.get("channel_title") or agg.get("channel_title") or ck,
+                        "status": status,
+                        "today_uploads": today_up,
+                        "daily_limit_est": daily_lim,
+                        "remaining_uploads_est": max(0, daily_lim - today_up) if status == "READY" else 0,
+                        "today_quota_units": today_units,
+                        "daily_quota_cap": daily_cap,
+                        "quota_used_pct": min(100, int((today_units / max(1, daily_cap)) * 100)),
+                        "today_mb": round(today_b / (1024 * 1024), 2),
+                        "total_videos": agg.get("videos", 0),
+                        "total_gb": round(agg.get("bytes", 0) / (1024 ** 3), 3),
+                        "total_mb": round(agg.get("bytes", 0) / (1024 * 1024), 1),
+                        "courses": sorted(list(agg.get("courses", set()))),
+                        "next_renew_ist": next_renew_ist,
+                        "cooldown_remaining_text": f"{rh}h {rm}m" if rem_limit_sec > 0 else "Active Now",
+                        "last_error": ch.get("last_error", ""),
+                        "updated_at": ch.get("updated_at", "")
+                    })
+            except Exception:
+                pass
+
+        for ck, agg in yt_lec_agg.items():
+            if ck in seen_keys:
+                continue
+            yt_channels_out.append({
+                "client_key": ck,
+                "channel_id": "",
+                "channel_title": agg.get("channel_title", ck),
+                "status": "LEGACY" if ck == "legacy_untracked" else "READY",
+                "today_uploads": 0,
+                "daily_limit_est": 15,
+                "remaining_uploads_est": 15,
+                "today_quota_units": 0,
+                "daily_quota_cap": 10000,
+                "quota_used_pct": 0,
+                "today_mb": 0.0,
+                "total_videos": agg.get("videos", 0),
+                "total_gb": round(agg.get("bytes", 0) / (1024 ** 3), 3),
+                "total_mb": round(agg.get("bytes", 0) / (1024 * 1024), 1),
+                "courses": sorted(list(agg.get("courses", set()))),
+                "next_renew_ist": quota_reset["reset_ist"],
+                "cooldown_remaining_text": "Active Now",
+                "last_error": "",
+                "updated_at": ""
+            })
+
+        tg_channels_out = []
+        for ch_id, tst in tg_lec_agg.items():
+            linked = sorted(list(tst.get("courses", set())))
+            if not linked:
+                linked = [v["name"] for v in course_map.values() if v.get("tg_channel_id") == ch_id and v.get("name")]
+            tg_channels_out.append({
+                "channel_id": ch_id,
+                "courses": linked,
+                "videos": tst["videos"],
+                "pdfs": tst["pdfs"],
+                "total_gb": round(tst["bytes"] / (1024 ** 3), 3),
+                "total_mb": round(tst["bytes"] / (1024 * 1024), 1)
+            })
+        tg_channels_out.sort(key=lambda x: x["videos"], reverse=True)
+
+        result = {
+            "quota_reset": quota_reset,
+            "totals": {
+                "yt_videos": total_yt_videos,
+                "yt_gb": round(total_yt_bytes / (1024 ** 3), 3),
+                "yt_mb": round(total_yt_bytes / (1024 * 1024), 1),
+                "tg_videos": total_tg_videos,
+                "tg_pdfs": total_tg_pdfs,
+                "tg_gb": round(total_tg_bytes / (1024 ** 3), 3),
+                "tg_mb": round(total_tg_bytes / (1024 * 1024), 1),
+                "drive_pdf_mb": round(total_drive_bytes / (1024 * 1024), 1),
+                "yt_channels_count": len([x for x in yt_channels_out if x["client_key"] != "legacy_untracked"]),
+                "tg_channels_count": len(tg_channels_out)
+            },
+            "yt_channels": yt_channels_out,
+            "tg_channels": tg_channels_out,
+            "updated_at": now_ist_str()
+        }
+        ram_cache.set("cv_analytics:full", result, ttl_sec=15)
+        return result
 
     # =========================================================
     # MULTI-BOT MANAGER (TELEGRAM ANTI-FLOOD ROTATION)
@@ -345,8 +677,7 @@ class CourseVaultDB:
             return []
         q = {} if include_inactive else {"active": {"$ne": False}}
         try:
-            docs = [_clean_doc(d) for d in primary["db"].tg_bots.find(q).sort("order", 1)]
-            return docs
+            return [_clean_doc(d) for d in primary["db"].tg_bots.find(q).sort("order", 1)]
         except Exception:
             return []
 
@@ -476,9 +807,6 @@ class CourseVaultDB:
             return False
         return primary["db"].scanner_tokens.delete_one({"user_id": str(user_id).strip()}).deleted_count > 0
 
-    # =========================================================
-    # SEQUENTIAL AUTO-INDEXING (001, 002, 003...)
-    # =========================================================
     def get_next_seq_index(self, course_id):
         primary = self.get_primary_db()
         cid = str(course_id or "").strip()
@@ -496,7 +824,7 @@ class CourseVaultDB:
             return 1
 
     # =========================================================
-    # COURSES (WITH TG CHANNEL, MODE, PRIORITY & PER-COURSE STATS)
+    # COURSES & SUBJECTS (TOPIC-WISE INDEX + CHANNEL OVERRIDES)
     # =========================================================
     def upsert_course(self, course_obj):
         primary = self.get_primary_db()
@@ -526,7 +854,6 @@ class CourseVaultDB:
             "priority": "normal",
             "tg_channel_id": "",
             "tg_channel_link": "",
-            "tg_index_msg_id": "",
             "first_saved_at": now_str
         }
         for k in list(set_doc.keys()):
@@ -543,7 +870,7 @@ class CourseVaultDB:
 
     def update_course_settings(
         self, course_id, tg_channel_id=None, tg_channel_link=None,
-        upload_mode=None, priority=None, tg_index_msg_id=None, playback_mode=None
+        upload_mode=None, priority=None, playback_mode=None
     ):
         primary = self.get_primary_db()
         cid = str(course_id or "").strip()
@@ -558,14 +885,13 @@ class CourseVaultDB:
             upd["upload_mode"] = upload_mode
         if priority in ("high", "normal"):
             upd["priority"] = priority
-        if tg_index_msg_id is not None:
-            upd["tg_index_msg_id"] = str(tg_index_msg_id).strip()
         if playback_mode in ("vault_first", "hls_live"):
             upd["playback_mode"] = playback_mode
 
         res = primary["db"].courses.update_one({"course_id": cid}, {"$set": upd})
         ram_cache.invalidate_prefix("cv_courses")
         ram_cache.invalidate_prefix("cv_summary")
+        ram_cache.invalidate_prefix("cv_analytics")
         return res.matched_count > 0
 
     def delete_course(self, course_id):
@@ -617,7 +943,7 @@ class CourseVaultDB:
                 proj = {
                     "course_id": 1, "status": 1, "yt_video_id": 1,
                     "yt_status": 1, "tg_status": 1, "tg_video_msg_id": 1,
-                    "drive_pdf1_id": 1, "drive_pdf2_id": 1
+                    "drive_pdf1_id": 1, "drive_pdf2_id": 1, "video_size_bytes": 1
                 }
                 for row in entry["db"].lectures.find({}, proj):
                     cid = str(row.get("course_id") or "")
@@ -625,9 +951,10 @@ class CourseVaultDB:
                         "total": 0, "ready": 0, "pending": 0, "failed": 0,
                         "yt_done": 0, "yt_pending": 0, "yt_failed": 0,
                         "tg_done": 0, "tg_pending": 0, "tg_failed": 0,
-                        "pdf_done": 0
+                        "pdf_done": 0, "bytes": 0
                     })
                     st["total"] += 1
+                    st["bytes"] += int(row.get("video_size_bytes") or 0)
                     overall = row.get("status") or "pending"
                     if overall == "completed":
                         st["ready"] += 1
@@ -669,6 +996,7 @@ class CourseVaultDB:
             d["failed_lectures"] = st.get("failed", 0)
             d["completed_lectures"] = st.get("ready", 0)
             d["pdf_ready_lectures"] = st.get("pdf_done", 0)
+            d["storage_gb"] = round(st.get("bytes", 0) / (1024 ** 3), 2)
             d["yt_stats"] = {
                 "completed": yt_d,
                 "pending": st.get("yt_pending", 0),
@@ -687,17 +1015,13 @@ class CourseVaultDB:
             d["tg_channel_link"] = d.get("tg_channel_link") or ""
             d["exam_logo"] = d.get("drive_thumb_url") or d.get("source_logo") or ""
 
-        # High priority courses first
         docs.sort(key=lambda x: (0 if x.get("priority") == "high" else 1, -int(x.get("ts", 0))))
-        ram_cache.set("cv_courses:all", docs, ttl_sec=30)
+        ram_cache.set("cv_courses:all", docs, ttl_sec=25)
         return docs
 
     def set_course_playback_mode(self, course_id, mode):
         return self.update_course_settings(course_id, playback_mode=mode)
 
-    # =========================================================
-    # SUBJECTS (WITH OPTIONAL SUBJECT CHANNEL & FORUM TOPIC ID)
-    # =========================================================
     def upsert_subject(self, course_id, sub_obj):
         primary = self.get_primary_db()
         cid = str(course_id or "").strip()
@@ -722,6 +1046,7 @@ class CourseVaultDB:
             "logo_status": "pending" if raw_logo.startswith("http") else "none",
             "tg_channel_id": "",
             "tg_topic_id": "",
+            "tg_topic_index_msg_id": "",
             "first_saved_at": now_str
         }
         for k in list(set_doc.keys()):
@@ -735,7 +1060,7 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix(f"cv_subjects:{cid}")
         return True
 
-    def update_subject_settings(self, course_id, subject_id, tg_channel_id=None, tg_topic_id=None):
+    def update_subject_settings(self, course_id, subject_id, tg_channel_id=None, tg_topic_id=None, tg_topic_index_msg_id=None):
         primary = self.get_primary_db()
         cid, sid = str(course_id or "").strip(), str(subject_id or "").strip()
         if not primary or not cid or not sid:
@@ -745,6 +1070,8 @@ class CourseVaultDB:
             upd["tg_channel_id"] = str(tg_channel_id).strip()
         if tg_topic_id is not None:
             upd["tg_topic_id"] = str(tg_topic_id).strip()
+        if tg_topic_index_msg_id is not None:
+            upd["tg_topic_index_msg_id"] = str(tg_topic_index_msg_id).strip()
         res = primary["db"].subjects.update_one({"course_id": cid, "subject_id": sid}, {"$set": upd})
         ram_cache.invalidate_prefix(f"cv_subjects:{cid}")
         return res.matched_count > 0
@@ -762,12 +1089,10 @@ class CourseVaultDB:
             d["subject_logo"] = d.get("drive_logo_url") or d.get("source_logo") or ""
             d["tg_channel_id"] = d.get("tg_channel_id") or ""
             d["tg_topic_id"] = d.get("tg_topic_id") or ""
-        ram_cache.set(f"cv_subjects:{cid}", docs, ttl_sec=60)
+            d["tg_topic_index_msg_id"] = d.get("tg_topic_index_msg_id") or ""
+        ram_cache.set(f"cv_subjects:{cid}", docs, ttl_sec=45)
         return docs
 
-    # =========================================================
-    # TOPICS
-    # =========================================================
     def upsert_topic(self, course_id, subject_id, top_obj):
         primary = self.get_primary_db()
         cid = str(course_id or "").strip()
@@ -808,7 +1133,7 @@ class CourseVaultDB:
         return docs
 
     # =========================================================
-    # LECTURES (DUAL-CHECK: YT + DRIVE + TELEGRAM + AUTO-INDEX)
+    # LECTURES (DUAL/SEPARATE YT & TG SCAN + PRIORITY CLAIM)
     # =========================================================
     def _effective_course_config(self, course_id, subject_id=""):
         settings = self.get_all_settings()
@@ -824,28 +1149,32 @@ class CourseVaultDB:
 
         tg_channel_id = (s_doc or {}).get("tg_channel_id") or (c_doc or {}).get("tg_channel_id") or ""
         tg_topic_id = (s_doc or {}).get("tg_topic_id") or ""
-        tg_channel_link = (c_doc or {}).get("tg_channel_link") or settings.get("portal_fallback", {}).get("default_tg_invite_link", "")
+        tg_topic_index_msg_id = (s_doc or {}).get("tg_topic_index_msg_id") or ""
+        tg_channel_link = (c_doc or {}).get("tg_channel_link") or ""
         return {
             "upload_mode": course_mode,
             "tg_channel_id": str(tg_channel_id).strip(),
             "tg_topic_id": str(tg_topic_id).strip(),
+            "tg_topic_index_msg_id": str(tg_topic_index_msg_id).strip(),
             "tg_channel_link": str(tg_channel_link).strip(),
             "priority": (c_doc or {}).get("priority", "normal"),
-            "playback_mode": (c_doc or {}).get("playback_mode", "vault_first"),
-            "tg_index_msg_id": (c_doc or {}).get("tg_index_msg_id", "")
+            "playback_mode": (c_doc or {}).get("playback_mode", "vault_first")
         }
 
-    def _is_lecture_missing_assets(self, doc, course_id, subject_id="", raw_thumb="", has_pdf1=False, has_pdf2=False):
+    def _is_lecture_missing_assets(
+        self, doc, course_id, subject_id="", raw_thumb="",
+        has_pdf1=False, has_pdf2=False, scan_target="both"
+    ):
         if not doc:
             return True, True, True
         cfg = self._effective_course_config(course_id, subject_id)
         mode = cfg["upload_mode"]
 
-        need_yt = mode in ("both", "only_yt")
-        need_tg = mode in ("both", "only_tg") and bool(cfg["tg_channel_id"])
+        check_yt = (scan_target in ("both", "only_yt")) and (mode in ("both", "only_yt"))
+        check_tg = (scan_target in ("both", "only_tg")) and (mode in ("both", "only_tg")) and bool(cfg["tg_channel_id"])
 
         yt_missing = False
-        if need_yt:
+        if check_yt:
             if not str(doc.get("yt_video_id") or "").strip():
                 yt_missing = True
             if raw_thumb and not str(doc.get("drive_thumb_id") or "").strip():
@@ -856,7 +1185,7 @@ class CourseVaultDB:
                 yt_missing = True
 
         tg_missing = False
-        if need_tg:
+        if check_tg:
             if not str(doc.get("tg_video_msg_id") or "").strip():
                 tg_missing = True
             if has_pdf1 and not str(doc.get("tg_pdf1_msg_id") or "").strip():
@@ -866,7 +1195,10 @@ class CourseVaultDB:
 
         return (yt_missing or tg_missing), yt_missing, tg_missing
 
-    def upsert_lecture_metadata(self, course_id, course_name, subject_id, subject_name, topic_id, topic_name, lec_obj):
+    def upsert_lecture_metadata(
+        self, course_id, course_name, subject_id, subject_name,
+        topic_id, topic_name, lec_obj, scan_target="both"
+    ):
         lid = str(lec_obj.get("id") or lec_obj.get("lecture_id") or "").strip()
         if not lid:
             return {"ok": False, "reason": "missing_id"}
@@ -914,7 +1246,7 @@ class CourseVaultDB:
                 set_fields["seq_code"] = str(seq_num).zfill(3)
 
             any_miss, yt_miss, tg_miss = self._is_lecture_missing_assets(
-                existing_doc, course_id, subject_id, raw_thumb, has_pdf1, has_pdf2
+                existing_doc, course_id, subject_id, raw_thumb, has_pdf1, has_pdf2, scan_target=scan_target
             )
             if existing_doc.get("status") != "processing" and any_miss:
                 set_fields["status"] = "pending"
@@ -930,14 +1262,19 @@ class CourseVaultDB:
             set_fields["seq_index"] = seq_num
             set_fields["seq_code"] = str(seq_num).zfill(3)
 
+        init_yt_st = "pending" if scan_target in ("both", "only_yt") else "skipped"
+        init_tg_st = "pending" if scan_target in ("both", "only_tg") else "skipped"
+
         on_insert = {
             "status": "pending",
-            "yt_status": "pending",
-            "tg_status": "pending",
+            "yt_status": init_yt_st,
+            "tg_status": init_tg_st,
             "source_video_url": "",
             "source_pdf1_url": "",
             "source_pdf2_url": "",
             "yt_video_id": "",
+            "yt_channel_key": "",
+            "yt_channel_title": "",
             "drive_pdf1_id": "",
             "drive_pdf2_id": "",
             "drive_thumb_id": "",
@@ -951,6 +1288,8 @@ class CourseVaultDB:
             "tg_master_pdf1_msg_id": "",
             "tg_master_pdf2_msg_id": "",
             "tg_video_link": "",
+            "video_size_bytes": 0,
+            "pdf_size_bytes": 0,
             "error_message": "",
             "yt_error": "",
             "tg_error": "",
@@ -967,11 +1306,7 @@ class CourseVaultDB:
         if on_insert:
             update_doc["$setOnInsert"] = on_insert
 
-        target_shard["db"].lectures.update_one(
-            {"lecture_id": lid},
-            update_doc,
-            upsert=True
-        )
+        target_shard["db"].lectures.update_one({"lecture_id": lid}, update_doc, upsert=True)
         ram_cache.invalidate_prefix(f"cv_lectures:{course_id}:{subject_id}:{topic_id}")
         ram_cache.invalidate_prefix(f"cv_lec:{lid}")
         ram_cache.invalidate_prefix("cv_summary")
@@ -1032,19 +1367,19 @@ class CourseVaultDB:
     def claim_next_lecture_one_by_one(self):
         settings = self.get_all_settings()
         wc = settings.get("worker_control", {})
-        if wc.get("state") == "PAUSED":
+        yt_on = bool(wc.get("yt_worker_enabled", True))
+        tg_on = bool(wc.get("tg_worker_enabled", True))
+        if wc.get("state") == "PAUSED" or (not yt_on and not tg_on):
             return None
 
         skip_id = str(wc.get("skip_lecture_id") or "").strip()
         if skip_id:
-            self.finish_lecture_item(skip_id, ok=False, error_message="Skipped by Admin from Panel", skipped=True)
+            self.finish_lecture_item(skip_id, ok=False, error_message="Skipped by Admin", skipped=True)
             self.set_worker_control(skip_lecture_id="")
 
-        # Prevent duplicate processing
         for entry in self.dbs:
             try:
-                busy = entry["db"].lectures.find_one({"status": "processing"})
-                if busy:
+                if entry["db"].lectures.find_one({"status": "processing"}):
                     return None
             except Exception:
                 continue
@@ -1054,8 +1389,11 @@ class CourseVaultDB:
             "status": "pending",
             "$or": [{"next_retry_ts": {"$exists": False}}, {"next_retry_ts": {"$lte": now_ts}}]
         }
+        if yt_on and not tg_on:
+            base_q["$and"] = [{"$or": [{"yt_status": {"$in": ["pending", "failed", None]}}, {"yt_video_id": {"$in": ["", None]}}]}]
+        elif tg_on and not yt_on:
+            base_q["$and"] = [{"$or": [{"tg_status": {"$in": ["pending", "failed", None]}}, {"tg_video_msg_id": {"$in": ["", None]}}]}]
 
-        # Check High Priority courses first
         primary = self.get_primary_db()
         high_cids = []
         if primary:
@@ -1086,8 +1424,8 @@ class CourseVaultDB:
                         c["effective_upload_mode"] = eff["upload_mode"]
                         c["effective_tg_channel_id"] = eff["tg_channel_id"]
                         c["effective_tg_topic_id"] = eff["tg_topic_id"]
+                        c["effective_tg_topic_index_msg_id"] = eff["tg_topic_index_msg_id"]
                         c["effective_tg_channel_link"] = eff["tg_channel_link"]
-                        c["course_tg_index_msg_id"] = eff["tg_index_msg_id"]
                         ram_cache.invalidate_prefix("cv_summary")
                         return c
                 except Exception:
@@ -1095,11 +1433,12 @@ class CourseVaultDB:
         return None
 
     def finish_lecture_item(
-        self, lecture_id, ok=True, yt_video_id="", drive_pdf1_id="", drive_pdf2_id="",
-        drive_thumb_id="", error_message="", yt_status="", tg_status="",
-        tg_channel_id="", tg_topic_id="", tg_video_msg_id="", tg_pdf1_msg_id="",
-        tg_pdf2_msg_id="", tg_master_video_msg_id="", tg_master_pdf1_msg_id="",
-        tg_master_pdf2_msg_id="", yt_error="", tg_error="", skipped=False
+        self, lecture_id, ok=True, yt_video_id="", yt_channel_key="", yt_channel_title="",
+        drive_pdf1_id="", drive_pdf2_id="", drive_thumb_id="", error_message="",
+        yt_status="", tg_status="", tg_channel_id="", tg_topic_id="",
+        tg_video_msg_id="", tg_pdf1_msg_id="", tg_pdf2_msg_id="",
+        tg_master_video_msg_id="", tg_master_pdf1_msg_id="", tg_master_pdf2_msg_id="",
+        video_size_bytes=0, pdf_size_bytes=0, yt_error="", tg_error="", skipped=False
     ):
         lid = str(lecture_id or "").strip()
         shard = self._find_lecture_shard(lid)
@@ -1153,6 +1492,10 @@ class CourseVaultDB:
 
         if yt_video_id:
             upd["yt_video_id"] = str(yt_video_id).strip()
+        if yt_channel_key:
+            upd["yt_channel_key"] = str(yt_channel_key).strip()
+        if yt_channel_title:
+            upd["yt_channel_title"] = str(yt_channel_title).strip()
         if drive_pdf1_id:
             upd["drive_pdf1_id"] = str(drive_pdf1_id).strip()
         if drive_pdf2_id:
@@ -1176,6 +1519,10 @@ class CourseVaultDB:
             upd["tg_master_pdf1_msg_id"] = str(tg_master_pdf1_msg_id).strip()
         if tg_master_pdf2_msg_id:
             upd["tg_master_pdf2_msg_id"] = str(tg_master_pdf2_msg_id).strip()
+        if video_size_bytes and int(video_size_bytes) > 0:
+            upd["video_size_bytes"] = int(video_size_bytes)
+        if pdf_size_bytes and int(pdf_size_bytes) > 0:
+            upd["pdf_size_bytes"] = int(pdf_size_bytes)
         if tg_link:
             upd["tg_video_link"] = tg_link
 
@@ -1196,46 +1543,45 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix("cv_")
         return True
 
-    def _decorate_lecture(self, d, playback_mode="vault_first", tg_fallback_enabled=True, default_tg_link=""):
+    def _decorate_portal_lecture(self, d, playback_mode="vault_first", include_admin_tg=False):
+        """Portal-safe lecture object: ONLY clean stream & Drive PDFs (Zero TG links exposed to students)."""
         c = _clean_doc(d)
         c["playback_mode"] = playback_mode
         c["thumbnail"] = c.get("drive_thumb_url") or c.get("source_thumb") or ""
         c["drive_pdf1_url"] = f"https://drive.google.com/file/d/{c['drive_pdf1_id']}/preview" if c.get("drive_pdf1_id") else ""
         c["drive_pdf2_url"] = f"https://drive.google.com/file/d/{c['drive_pdf2_id']}/preview" if c.get("drive_pdf2_id") else ""
-        c["tg_fallback_enabled"] = tg_fallback_enabled
-        c["tg_fallback_url"] = c.get("tg_video_link") or build_tg_msg_link(
-            c.get("tg_channel_id", ""), c.get("tg_video_msg_id", ""), default_tg_link
-        )
+        if not include_admin_tg:
+            for k in (
+                "tg_channel_id", "tg_topic_id", "tg_video_msg_id", "tg_pdf1_msg_id",
+                "tg_pdf2_msg_id", "tg_master_video_msg_id", "tg_master_pdf1_msg_id",
+                "tg_master_pdf2_msg_id", "tg_video_link", "tg_fallback_url", "tg_fallback_enabled"
+            ):
+                c.pop(k, None)
         return c
 
-    def get_topic_lectures(self, course_id, subject_id, topic_id):
+    def get_topic_lectures(self, course_id, subject_id, topic_id, include_admin_tg=False):
         cid, sid, tid = str(course_id), str(subject_id), str(topic_id)
-        key = f"cv_lectures:{cid}:{sid}:{tid}"
+        key = f"cv_lectures:{cid}:{sid}:{tid}:{'adm' if include_admin_tg else 'pub'}"
         cached = ram_cache.get(key)
         if cached is not None:
             return cached
 
         eff = self._effective_course_config(cid, sid)
-        pf = self.get_all_settings().get("portal_fallback", {})
         merged = []
         for entry in self.dbs:
             try:
                 for d in entry["db"].lectures.find({"course_id": cid, "subject_id": sid, "topic_id": tid}).sort([("seq_index", 1), ("ts", 1)]):
-                    merged.append(self._decorate_lecture(
-                        d,
-                        playback_mode=eff["playback_mode"],
-                        tg_fallback_enabled=bool(pf.get("tg_fallback_enabled", True)),
-                        default_tg_link=eff["tg_channel_link"]
-                    ))
+                    merged.append(self._decorate_portal_lecture(d, playback_mode=eff["playback_mode"], include_admin_tg=include_admin_tg))
             except Exception:
                 continue
 
-        ram_cache.set(key, merged, ttl_sec=45)
+        ram_cache.set(key, merged, ttl_sec=40)
         return merged
 
-    def get_single_lecture(self, lecture_id):
+    def get_single_lecture(self, lecture_id, include_admin_tg=False):
         lid = str(lecture_id or "").strip()
-        cached = ram_cache.get(f"cv_lec:{lid}")
+        key = f"cv_lec:{lid}:{'adm' if include_admin_tg else 'pub'}"
+        cached = ram_cache.get(key)
         if cached is not None:
             return cached
         shard = self._find_lecture_shard(lid)
@@ -1245,27 +1591,9 @@ class CourseVaultDB:
         if not doc:
             return None
         eff = self._effective_course_config(doc.get("course_id", ""), doc.get("subject_id", ""))
-        pf = self.get_all_settings().get("portal_fallback", {})
-        c = self._decorate_lecture(
-            doc,
-            playback_mode=eff["playback_mode"],
-            tg_fallback_enabled=bool(pf.get("tg_fallback_enabled", True)),
-            default_tg_link=eff["tg_channel_link"]
-        )
-        ram_cache.set(f"cv_lec:{lid}", c, ttl_sec=60)
+        c = self._decorate_portal_lecture(doc, playback_mode=eff["playback_mode"], include_admin_tg=include_admin_tg)
+        ram_cache.set(key, c, ttl_sec=60)
         return c
-
-    def get_course_index_lectures(self, course_id):
-        cid = str(course_id or "").strip()
-        items = []
-        for entry in self.dbs:
-            try:
-                for d in entry["db"].lectures.find({"course_id": cid}).sort([("seq_index", 1), ("ts", 1)]):
-                    items.append(_clean_doc(d))
-            except Exception:
-                continue
-        items.sort(key=lambda x: (int(x.get("seq_index", 999999)), int(x.get("ts", 0))))
-        return items
 
     def manual_override_lecture(
         self, lecture_id, yt_video_id="", drive_pdf1_id="", drive_pdf2_id="",
@@ -1320,7 +1648,7 @@ class CourseVaultDB:
         return count
 
     # =========================================================
-    # 1-CLICK CHANNEL RESTORE QUEUE (FROM MASTER BACKUP)
+    # 1-CLICK CHANNEL RESTORE QUEUE
     # =========================================================
     def create_restore_job(self, course_id, target_channel_id, subject_id="", target_topic_id=""):
         primary = self.get_primary_db()
@@ -1345,7 +1673,6 @@ class CourseVaultDB:
             "ts": int(time.time())
         }
         primary["db"].restore_jobs.insert_one(doc)
-        # Also update course/subject channel ID to new target
         if subject_id:
             self.update_subject_settings(cid, subject_id, tg_channel_id=tch, tg_topic_id=target_topic_id)
         else:
@@ -1362,62 +1689,6 @@ class CourseVaultDB:
         except Exception:
             return []
 
-    def claim_next_restore_job(self):
-        primary = self.get_primary_db()
-        if not primary:
-            return None
-        doc = primary["db"].restore_jobs.find_one_and_update(
-            {"status": "pending"},
-            {"$set": {"status": "running", "updated_at": now_ist_str()}},
-            sort=[("ts", 1)],
-            return_document=True
-        )
-        if not doc:
-            return None
-        job = _clean_doc(doc)
-        # Attach all lectures with master backup message IDs
-        q = {"course_id": job["course_id"]}
-        if job.get("subject_id"):
-            q["subject_id"] = job["subject_id"]
-        msgs = []
-        for entry in self.dbs:
-            try:
-                for d in entry["db"].lectures.find(q):
-                    if d.get("tg_master_video_msg_id") or d.get("tg_master_pdf1_msg_id") or d.get("tg_master_pdf2_msg_id"):
-                        msgs.append({
-                            "lecture_id": str(d.get("lecture_id")),
-                            "seq_index": int(d.get("seq_index", 0)),
-                            "title": d.get("title", ""),
-                            "tg_master_video_msg_id": str(d.get("tg_master_video_msg_id") or ""),
-                            "tg_master_pdf1_msg_id": str(d.get("tg_master_pdf1_msg_id") or ""),
-                            "tg_master_pdf2_msg_id": str(d.get("tg_master_pdf2_msg_id") or "")
-                        })
-            except Exception:
-                continue
-        msgs.sort(key=lambda x: x["seq_index"])
-        job["items"] = msgs
-        return job
-
-    def update_restore_job(self, job_id, status, done_count=0, total_count=0, error=""):
-        primary = self.get_primary_db()
-        if not primary or not job_id:
-            return False
-        primary["db"].restore_jobs.update_one(
-            {"job_id": str(job_id).strip()},
-            {"$set": {
-                "status": str(status),
-                "done_count": int(done_count or 0),
-                "total_count": int(total_count or 0),
-                "error": str(error or "")[:200],
-                "updated_at": now_ist_str()
-            }}
-        )
-        ram_cache.invalidate_prefix("cv_summary")
-        return True
-
-    # =========================================================
-    # WORKER HEARTBEAT (WITH STORAGE, BATTERY & ACTIVE BOT)
-    # =========================================================
     def update_worker_heartbeat(self, payload):
         primary = self.get_primary_db()
         if not primary or not isinstance(payload, dict):
@@ -1433,11 +1704,7 @@ class CourseVaultDB:
             "updated_at": now_ist_str(),
             "ts": int(time.time())
         }
-        primary["db"].worker_status.update_one(
-            {"_id": "termux_archiver"},
-            {"$set": doc},
-            upsert=True
-        )
+        primary["db"].worker_status.update_one({"_id": "termux_archiver"}, {"$set": doc}, upsert=True)
         ram_cache.invalidate_prefix("cv_summary")
         return True
 
@@ -1465,12 +1732,14 @@ class CourseVaultDB:
             "exported_at": now_ist_str(),
             "settings": self.get_all_settings(),
             "tg_bots": self.get_tg_bots(include_inactive=True),
+            "yt_channels": [],
             "courses": [],
             "subjects": [],
             "topics": [],
             "lectures": []
         }
         if primary:
+            data["yt_channels"] = [_clean_doc(d) for d in primary["db"].yt_channels.find()]
             data["courses"] = [_clean_doc(d) for d in primary["db"].courses.find()]
             data["subjects"] = [_clean_doc(d) for d in primary["db"].subjects.find()]
             data["topics"] = [_clean_doc(d) for d in primary["db"].topics.find()]
@@ -1492,38 +1761,37 @@ class CourseVaultDB:
 
         if isinstance(data.get("settings"), dict):
             self.update_settings(data["settings"])
-
         for b in (data.get("tg_bots") or []):
             if isinstance(b, dict) and b.get("token"):
                 self.upsert_tg_bot(b.get("bot_id", ""), b.get("label", "TG Bot"), b["token"], b.get("active", True), b.get("order", 0))
                 counts["bots"] += 1
-
+        for yc in (data.get("yt_channels") or []):
+            if isinstance(yc, dict) and yc.get("client_key"):
+                d = dict(yc)
+                d.pop("_id", None)
+                primary["db"].yt_channels.update_one({"client_key": str(d["client_key"])}, {"$set": d}, upsert=True)
         for c in (data.get("courses") or []):
             if isinstance(c, dict) and c.get("course_id"):
                 d = dict(c)
                 d.pop("_id", None)
                 primary["db"].courses.update_one({"course_id": str(d["course_id"])}, {"$set": d}, upsert=True)
                 counts["courses"] += 1
-
         for s in (data.get("subjects") or []):
             if isinstance(s, dict) and s.get("course_id") and s.get("subject_id"):
                 d = dict(s)
                 d.pop("_id", None)
                 primary["db"].subjects.update_one(
                     {"course_id": str(d["course_id"]), "subject_id": str(d["subject_id"])},
-                    {"$set": d},
-                    upsert=True
+                    {"$set": d}, upsert=True
                 )
                 counts["subjects"] += 1
-
         for t in (data.get("topics") or []):
             if isinstance(t, dict) and t.get("course_id") and t.get("subject_id") and t.get("topic_id"):
                 d = dict(t)
                 d.pop("_id", None)
                 primary["db"].topics.update_one(
                     {"course_id": str(d["course_id"]), "subject_id": str(d["subject_id"]), "topic_id": str(d["topic_id"])},
-                    {"$set": d},
-                    upsert=True
+                    {"$set": d}, upsert=True
                 )
                 counts["topics"] += 1
 
@@ -1541,7 +1809,7 @@ class CourseVaultDB:
         return {"ok": True, "restored": counts}
 
     # =========================================================
-    # DIRECT SUMMARY (OLD FIELDS 100% INTACT + SEPARATE YT & TG STATS)
+    # DIRECT SUMMARY
     # =========================================================
     def get_direct_summary(self):
         cached = ram_cache.get("cv_summary:main")
@@ -1661,6 +1929,7 @@ class CourseVaultDB:
             "tg_bots_active": tg_bots_active,
             "active_restore_jobs": active_restore_jobs,
             "worker_control": self.get_all_settings().get("worker_control", {}),
+            "quota_reset": get_next_yt_api_quota_reset(),
             "per_shard": per_shard,
             "worker": self.get_worker_heartbeat(),
             "ram_cache": ram_cache.stats(),
