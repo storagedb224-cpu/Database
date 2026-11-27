@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <title>RWA Course Vault Admin | Dual-Scan, Folder Recheck & Queue Control</title>
+    <title>RWA Course Vault Pro Admin | YT + Telegram Double Backup Control Center</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -14,7 +14,7 @@
             color: #0f172a;
         }
         .glass {
-            background: rgba(255, 255, 255, 0.92);
+            background: rgba(255, 255, 255, 0.93);
             backdrop-filter: blur(14px);
             border: 2px solid #ffffff;
             box-shadow: 0 10px 26px rgba(2, 132, 199, 0.14);
@@ -40,9 +40,52 @@
             transition: filter 0.15s;
         }
         .btn-p:hover { filter: brightness(1.07); }
+        .folder-tab {
+            background: rgba(255, 255, 255, 0.85);
+            border: 2px solid #e0f2fe;
+            border-radius: 16px;
+            padding: 10px 12px;
+            font-size: 11px;
+            font-weight: 900;
+            cursor: pointer;
+            transition: all 0.15s;
+            text-align: left;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .folder-tab:hover { border-color: #38bdf8; transform: translateY(-1px); }
+        .folder-tab.active {
+            background: linear-gradient(135deg, #0284c7, #2563eb);
+            color: #ffffff;
+            border-color: #1d4ed8;
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.25);
+        }
+        .switch-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 12px;
+            background: #f8fafc;
+            border: 1.5px solid #e0f2fe;
+            border-radius: 12px;
+        }
+        .chip {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 8px;
+            background: #e0f2fe;
+            color: #0369a1;
+            font-size: 10px;
+            font-weight: 800;
+            cursor: pointer;
+            border: 1px solid #bae6fd;
+        }
+        .chip:hover { background: #bae6fd; }
     </style>
 </head>
-<body class="p-3 sm:p-6">
+<body class="p-3 sm:p-5">
 
     <div id="cvToastBox" class="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-xs w-full pointer-events-none"></div>
 
@@ -51,9 +94,9 @@
         <div class="glass max-w-md w-full rounded-3xl p-7 text-center space-y-4">
             <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-500 to-blue-700 text-white text-3xl font-black flex items-center justify-center mx-auto shadow-lg">🎓</div>
             <div>
-                <span class="px-3 py-1 rounded-full bg-sky-100 text-sky-900 text-[10px] font-black uppercase">Zero-Cost Streaming Vault</span>
-                <h1 class="text-2xl font-black mt-2">RWA COURSE VAULT ADMIN</h1>
-                <p class="text-xs font-bold opacity-70 mt-1">Dual-Scan (Server + DB) • Folder Recheck • Queue Control</p>
+                <span class="px-3 py-1 rounded-full bg-sky-100 text-sky-900 text-[10px] font-black uppercase">YT + Telegram Double Backup</span>
+                <h1 class="text-2xl font-black mt-2">RWA COURSE VAULT PRO</h1>
+                <p class="text-xs font-bold opacity-70 mt-1">A-to-Z Folder Control Center • Zero-Data Termux Engine</p>
             </div>
             <div class="text-left space-y-2">
                 <label class="text-xs font-extrabold opacity-80">Course Vault Render URL</label>
@@ -62,124 +105,728 @@
                 <input id="cvAdminKeyInput" type="password" class="inp" placeholder="Enter COURSE_ADMIN_KEY..." onkeydown="if(event.key==='Enter') unlockCourseAdmin()">
             </div>
             <div id="cvLoginErr" class="hidden p-2.5 rounded-xl bg-rose-100 text-rose-800 text-xs font-extrabold"></div>
-            <button onclick="unlockCourseAdmin()" class="btn-p w-full py-3 text-sm">🔓 Unlock Course Vault</button>
+            <button onclick="unlockCourseAdmin()" class="btn-p w-full py-3 text-sm">🔓 Unlock Command Center</button>
         </div>
     </div>
 
     <!-- MAIN DASHBOARD -->
-    <div id="cvMainApp" class="hidden max-w-7xl mx-auto space-y-5">
+    <div id="cvMainApp" class="hidden max-w-7xl mx-auto space-y-4">
 
-        <!-- TOP BAR -->
+        <!-- TOP HEADER BAR -->
         <div class="glass rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-                <h1 class="text-xl font-black leading-tight">🎓 RWA Course Vault Command Center</h1>
+                <h1 class="text-xl font-black leading-tight">🎓 RWA Course Vault — A-to-Z Control Center</h1>
                 <div id="cvTopMeta" class="text-[11px] font-bold opacity-70 mt-0.5">Updated: --</div>
             </div>
             <div class="flex items-center gap-2 flex-wrap">
-                <button onclick="stopCourseScan()" class="px-3.5 py-2 rounded-xl bg-rose-600 text-white font-black text-xs border-0 cursor-pointer">⏹ Stop Process</button>
-                <button onclick="clearAllQueue()" class="px-3.5 py-2 rounded-xl bg-orange-600 text-white font-black text-xs border-0 cursor-pointer">🧹 Clear Queue</button>
-                <button onclick="retryAllFailedQueue()" class="px-3.5 py-2 rounded-xl bg-amber-500 text-white font-black text-xs border-0 cursor-pointer">🔄 Retry Failed</button>
-                <button onclick="flushCourseCache()" class="px-3.5 py-2 rounded-xl bg-indigo-600 text-white font-black text-xs border-0 cursor-pointer">⚡ Flush Cache</button>
-                <button onclick="refreshAllCourseVault()" class="btn-p px-4 py-2 text-xs">🔄 Refresh</button>
-                <button onclick="lockCourseAdmin()" class="px-3.5 py-2 rounded-xl bg-slate-800 text-white font-black text-xs border-0 cursor-pointer">🔒 Lock</button>
+                <button onclick="stopCourseScan()" class="px-3 py-2 rounded-xl bg-rose-600 text-white font-black text-xs border-0 cursor-pointer">⏹ Stop Scan</button>
+                <button onclick="clearAllQueue()" class="px-3 py-2 rounded-xl bg-orange-600 text-white font-black text-xs border-0 cursor-pointer">🧹 Clear Queue</button>
+                <button onclick="retryAllFailedQueue('')" class="px-3 py-2 rounded-xl bg-amber-500 text-white font-black text-xs border-0 cursor-pointer">🔄 Retry Failed</button>
+                <button onclick="flushCourseCache()" class="px-3 py-2 rounded-xl bg-indigo-600 text-white font-black text-xs border-0 cursor-pointer">⚡ Flush Cache</button>
+                <button onclick="refreshAllCourseVault()" class="btn-p px-3.5 py-2 text-xs">🔄 Refresh</button>
+                <button onclick="lockCourseAdmin()" class="px-3 py-2 rounded-xl bg-slate-800 text-white font-black text-xs border-0 cursor-pointer">🔒 Lock</button>
             </div>
         </div>
 
-        <!-- ONLY-TOKEN VERIFY & PURCHASED COURSES PICKER -->
-        <div class="glass rounded-2xl p-5 space-y-4">
-            <div class="flex flex-wrap justify-between items-center gap-2">
-                <div>
-                    <h3 class="font-black text-base">🔑 Paste RWA Token → Verify & Pick Course</h3>
-                    <p class="text-[11px] font-bold opacity-65">Sirf JWT Token dalein — User ID auto-detect hogi aur saare Purchased Courses niche dikh jayenge.</p>
-                </div>
-                <span id="tkVerifyStatus" class="hidden px-3 py-1 rounded-full text-xs font-black"></span>
-            </div>
-            <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
-                <input id="tkVal" type="text" placeholder="Paste JWT Token (eyJ...)..." class="inp sm:col-span-3 font-mono">
-                <button id="btnVerifyToken" onclick="verifyAndLoadTokenCourses()" class="btn-p py-2.5 text-xs">🔍 Verify & Load Courses</button>
-            </div>
-            <div id="cvTokensList" class="flex flex-wrap gap-2 text-xs"></div>
-
-            <div id="verifiedCoursesWrap" class="hidden pt-3 border-t border-sky-200 space-y-3">
-                <h4 id="verifiedCoursesTitle" class="font-black text-sm text-emerald-700">✅ Purchased Courses</h4>
-                <div id="verifiedCoursesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
-            </div>
+        <!-- FEATURE FOLDERS NAVIGATION GRID -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+            <button id="ftab_dashboard" onclick="openFeatureFolder('dashboard')" class="folder-tab active"><span>📊</span><span>Stats &amp; Live</span></button>
+            <button id="ftab_courses" onclick="openFeatureFolder('courses')" class="folder-tab"><span>🎓</span><span>Courses &amp; Mirror</span></button>
+            <button id="ftab_scanner" onclick="openFeatureFolder('scanner')" class="folder-tab"><span>🔑</span><span>Token &amp; Scan</span></button>
+            <button id="ftab_telegram" onclick="openFeatureFolder('telegram')" class="folder-tab"><span>🤖</span><span>TG &amp; Multi-Bot</span></button>
+            <button id="ftab_captions" onclick="openFeatureFolder('captions')" class="folder-tab"><span>📝</span><span>Captions &amp; Btns</span></button>
+            <button id="ftab_guards" onclick="openFeatureFolder('guards')" class="folder-tab"><span>🛡️</span><span>WM &amp; 2GB Guard</span></button>
+            <button id="ftab_worker" onclick="openFeatureFolder('worker')" class="folder-tab"><span>📱</span><span>Worker Control</span></button>
+            <button id="ftab_backup" onclick="openFeatureFolder('backup')" class="folder-tab"><span>♻️</span><span>Restore &amp; Backup</span></button>
         </div>
 
-        <!-- TERMUX WORKER + SCANNER + LIVE LOGS -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div class="glass rounded-2xl p-5 space-y-3">
-                <div class="flex justify-between items-center">
-                    <h3 class="font-black text-sm">📱 Termux Upload Worker</h3>
-                    <span id="workerOnlinePill" class="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black">⚪ OFFLINE</span>
+        <!-- =========================================================
+             FOLDER 1: DASHBOARD, DUAL PROGRESS (YT & TG) & LIVE LOGS
+             ========================================================= -->
+        <section id="folder_dashboard" class="folder-pane space-y-4">
+            <!-- SEPARATE YOUTUBE & TELEGRAM PROGRESS BARS -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="glass rounded-2xl p-5 space-y-3">
+                    <div class="flex justify-between items-center">
+                        <h3 class="font-black text-sm text-red-700">▶️ YouTube Backup Progress</h3>
+                        <span id="ytGlobalPct" class="px-2.5 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-black">0%</span>
+                    </div>
+                    <div class="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+                        <div id="ytGlobalBar" class="h-full bg-gradient-to-r from-red-500 to-rose-600 transition-all" style="width:0%"></div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 text-center text-xs font-black">
+                        <div class="p-2 rounded-xl bg-emerald-50 text-emerald-700">✅ Done: <span id="ytStatDone">0</span></div>
+                        <div class="p-2 rounded-xl bg-amber-50 text-amber-700">⏳ Pend: <span id="ytStatPend">0</span></div>
+                        <div class="p-2 rounded-xl bg-rose-50 text-rose-700">❌ Fail: <span id="ytStatFail">0</span></div>
+                    </div>
                 </div>
-                <div id="workerTaskText" class="text-xs font-bold opacity-80">Termux mein <code>rwa</code> run karein.</div>
-                <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
-                    <div id="workerProgBar" class="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all" style="width:0%"></div>
+
+                <div class="glass rounded-2xl p-5 space-y-3">
+                    <div class="flex justify-between items-center">
+                        <h3 class="font-black text-sm text-sky-700">✈️ Telegram Backup Progress</h3>
+                        <span id="tgGlobalPct" class="px-2.5 py-0.5 rounded-full bg-sky-100 text-sky-800 text-xs font-black">0%</span>
+                    </div>
+                    <div class="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+                        <div id="tgGlobalBar" class="h-full bg-gradient-to-r from-sky-500 to-blue-600 transition-all" style="width:0%"></div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 text-center text-xs font-black">
+                        <div class="p-2 rounded-xl bg-emerald-50 text-emerald-700">✅ Done: <span id="tgStatDone">0</span></div>
+                        <div class="p-2 rounded-xl bg-amber-50 text-amber-700">⏳ Pend: <span id="tgStatPend">0</span></div>
+                        <div class="p-2 rounded-xl bg-rose-50 text-rose-700">❌ Fail: <span id="tgStatFail">0</span></div>
+                    </div>
                 </div>
-                <div id="workerTimeMeta" class="text-[10px] font-bold opacity-65">Last ping: --</div>
             </div>
 
-            <div class="glass rounded-2xl p-5 lg:col-span-2 space-y-3">
-                <div class="flex flex-wrap justify-between items-center gap-2">
-                    <div>
-                        <div class="flex items-center gap-2">
-                            <h3 class="font-black text-sm">🤖 Course Dual-Scanner (Server + MongoDB)</h3>
-                            <span id="cvScanPill" class="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black">IDLE</span>
-                        </div>
-                        <p class="text-[11px] font-bold opacity-65">Missing Thumbnail / PDF / Video automatically re-queue hota hai</p>
+            <!-- TERMUX WORKER + SCANNER + LIVE LOGS -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div class="glass rounded-2xl p-5 space-y-3">
+                    <div class="flex justify-between items-center">
+                        <h3 class="font-black text-sm">📱 Termux Upload Worker</h3>
+                        <span id="workerOnlinePill" class="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black">⚪ OFFLINE</span>
+                    </div>
+                    <div id="workerTaskText" class="text-xs font-bold opacity-80">Termux mein <code>rwa</code> run karein.</div>
+                    <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div id="workerProgBar" class="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all" style="width:0%"></div>
+                    </div>
+                    <div id="workerHealthRow" class="flex flex-wrap gap-1.5 text-[10px] font-black">
+                        <span class="px-2 py-0.5 rounded bg-sky-50 text-sky-800">💾 Free: -- GB</span>
+                        <span class="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800">🔋 Bat: --%</span>
+                        <span class="px-2 py-0.5 rounded bg-indigo-50 text-indigo-800">🤖 Bot: --</span>
                     </div>
                     <div class="flex gap-2">
-                        <button id="cvStartScanBtn" onclick="startCourseScan('')" class="btn-p px-4 py-2 text-xs">🚀 Scan All</button>
-                        <button id="cvStopScanBtn" onclick="stopCourseScan()" class="px-4 py-2 rounded-xl bg-rose-600 text-white font-black text-xs border-0 cursor-pointer">⏹ Stop</button>
+                        <button onclick="quickWorkerState('PAUSED')" class="flex-1 py-1.5 rounded-xl bg-amber-500 text-white font-black text-[11px] border-0 cursor-pointer">⏸ Pause</button>
+                        <button onclick="quickWorkerState('RUNNING')" class="flex-1 py-1.5 rounded-xl bg-emerald-600 text-white font-black text-[11px] border-0 cursor-pointer">▶️ Resume</button>
+                    </div>
+                    <div id="workerTimeMeta" class="text-[10px] font-bold opacity-65">Last ping: --</div>
+                </div>
+
+                <div class="glass rounded-2xl p-5 lg:col-span-2 space-y-3">
+                    <div class="flex flex-wrap justify-between items-center gap-2">
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-black text-sm">🤖 Course Dual-Scanner (YT + Drive + Telegram)</h3>
+                                <span id="cvScanPill" class="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black">IDLE</span>
+                            </div>
+                            <p class="text-[11px] font-bold opacity-65">Har scan mein YT, Drive PDF/Thumb aur Telegram sab check hota hai</p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="startCourseScan('')" class="btn-p px-4 py-2 text-xs">🚀 Scan All</button>
+                            <button onclick="stopCourseScan()" class="px-4 py-2 rounded-xl bg-rose-600 text-white font-black text-xs border-0 cursor-pointer">⏹ Stop</button>
+                        </div>
+                    </div>
+                    <div class="flex justify-between text-xs font-black">
+                        <span id="cvScanPhase" class="truncate">Ready</span>
+                        <span id="cvScanPct" class="text-blue-600">0%</span>
+                    </div>
+                    <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div id="cvScanBar" class="h-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all" style="width:0%"></div>
+                    </div>
+                    <div id="cvScanStatsRow" class="text-[11px] font-bold opacity-75">Batches: 0/0 • New: 0 • Missing Re-queued: 0 • Skipped: 0</div>
+                    <div id="cvScanLogs" class="text-[11px] font-mono bg-slate-900 text-emerald-300 p-3 rounded-xl max-h-36 overflow-y-auto space-y-0.5">
+                        <div class="opacity-60">Live scanner logs yahan dikhenge...</div>
                     </div>
                 </div>
-                <div class="flex justify-between text-xs font-black">
-                    <span id="cvScanPhase" class="truncate">Ready</span>
-                    <span id="cvScanPct" class="text-blue-600">0%</span>
-                </div>
-                <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
-                    <div id="cvScanBar" class="h-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all" style="width:0%"></div>
-                </div>
-                <div id="cvScanStatsRow" class="text-[11px] font-bold opacity-75">Batches: 0/0 • New: 0 • Missing Re-queued: 0 • Skipped: 0</div>
-                <div id="cvScanLogs" class="text-[11px] font-mono bg-slate-900 text-emerald-300 p-3 rounded-xl max-h-36 overflow-y-auto space-y-0.5">
-                    <div class="opacity-60">Live scanner logs yahan dikhenge...</div>
-                </div>
             </div>
-        </div>
 
-        <!-- DIRECT SUMMARY KPIs & SHARDS -->
-        <div class="glass rounded-2xl p-5 space-y-4">
-            <div class="flex justify-between items-center flex-wrap gap-2">
-                <h3 class="font-black text-base">📊 Course Vault Direct Summary</h3>
-                <span id="cvStorageBadge" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-black">Checking DBs...</span>
+            <!-- DIRECT SUMMARY KPIs & SHARDS (ALL OLD STATS INTACT + NEW TG STATS) -->
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex justify-between items-center flex-wrap gap-2">
+                    <h3 class="font-black text-base">📊 Course Vault Direct Summary</h3>
+                    <span id="cvStorageBadge" class="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-black">Checking DBs...</span>
+                </div>
+                <div id="cvSummaryKpis" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3"></div>
+                <div id="cvShardsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
             </div>
-            <div id="cvSummaryKpis" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3"></div>
-            <div id="cvShardsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
-        </div>
+        </section>
 
-        <!-- WEBSITE-MIRROR COURSE EXPLORER WITH FOLDER RECHECK -->
-        <div class="glass rounded-2xl p-5 space-y-4">
-            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-sky-200 pb-3">
-                <div class="flex items-center gap-2.5 min-w-0">
-                    <button id="cvMirrorBackBtn" onclick="cvMirrorBack()" class="hidden px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-black border-0 cursor-pointer">← Back</button>
-                    <div class="min-w-0">
-                        <div id="cvMirrorCrumb" class="text-[10px] font-black uppercase text-blue-600">Course Vault Root</div>
-                        <h3 id="cvMirrorHeading" class="font-black text-base truncate">🎓 All Archived Batches (Website Mirror)</h3>
+        <!-- =========================================================
+             FOLDER 2: COURSES, PER-COURSE YT+TG STATS & WEBSITE MIRROR
+             ========================================================= -->
+        <section id="folder_courses" class="folder-pane hidden space-y-4">
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-sky-200 pb-3">
+                    <div class="flex items-center gap-2.5 min-w-0">
+                        <button id="cvMirrorBackBtn" onclick="cvMirrorBack()" class="hidden px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-black border-0 cursor-pointer">← Back</button>
+                        <div class="min-w-0">
+                            <div id="cvMirrorCrumb" class="text-[10px] font-black uppercase text-blue-600">Course Vault Root</div>
+                            <h3 id="cvMirrorHeading" class="font-black text-base truncate">🎓 All Archived Batches (Per-Course YT &amp; TG Stats)</h3>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <select id="cvRecheckTarget" class="inp w-auto py-1.5 text-xs">
+                            <option value="both">Target: YT + TG</option>
+                            <option value="yt">Target: YT Only</option>
+                            <option value="tg">Target: TG Only</option>
+                        </select>
+                        <button id="cvFolderRecheckBtn" onclick="recheckCurrentFolder()" class="hidden px-3 py-2 rounded-xl bg-teal-600 text-white font-black text-xs border-0 cursor-pointer">🔄 Recheck Folder</button>
+                        <input id="cvMirrorSearch" type="text" oninput="filterCvMirror()" placeholder="🔍 Search batch / subject / class..." class="inp max-w-xs">
                     </div>
                 </div>
-                <div class="flex items-center gap-2 flex-wrap">
-                    <button id="cvFolderRecheckBtn" onclick="recheckCurrentFolder()" class="hidden px-3 py-2 rounded-xl bg-teal-600 text-white font-black text-xs border-0 cursor-pointer">🔄 Recheck This Folder</button>
-                    <input id="cvMirrorSearch" type="text" oninput="filterCvMirror()" placeholder="🔍 Search batch / subject / class..." class="inp max-w-xs">
+                <div id="cvMirrorGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+            </div>
+        </section>
+
+        <!-- =========================================================
+             FOLDER 3: RWA TOKEN VERIFY & COURSE SCANNER
+             ========================================================= -->
+        <section id="folder_scanner" class="folder-pane hidden space-y-4">
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2">
+                    <div>
+                        <h3 class="font-black text-base">🔑 Paste RWA Token → Verify &amp; Pick Course</h3>
+                        <p class="text-[11px] font-bold opacity-65">JWT Token dalein — User ID auto-detect hogi aur saare Purchased Courses niche dikh jayenge.</p>
+                    </div>
+                    <span id="tkVerifyStatus" class="hidden px-3 py-1 rounded-full text-xs font-black"></span>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                    <input id="tkVal" type="text" placeholder="Paste JWT Token (eyJ...)..." class="inp sm:col-span-3 font-mono">
+                    <button id="btnVerifyToken" onclick="verifyAndLoadTokenCourses()" class="btn-p py-2.5 text-xs">🔍 Verify &amp; Load Courses</button>
+                </div>
+                <div>
+                    <div class="text-xs font-black opacity-75 mb-2">Saved Scanner Tokens:</div>
+                    <div id="cvTokensList" class="flex flex-wrap gap-2 text-xs"></div>
+                </div>
+                <div id="verifiedCoursesWrap" class="hidden pt-3 border-t border-sky-200 space-y-3">
+                    <h4 id="verifiedCoursesTitle" class="font-black text-sm text-emerald-700">✅ Purchased Courses</h4>
+                    <div id="verifiedCoursesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
                 </div>
             </div>
-            <div id="cvMirrorGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+        </section>
+
+        <!-- =========================================================
+             FOLDER 4: TELEGRAM CORE SETTINGS & MULTI-BOT ROTATION
+             ========================================================= -->
+        <section id="folder_telegram" class="folder-pane hidden space-y-4">
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 border-b border-sky-200 pb-3">
+                    <div>
+                        <h3 class="font-black text-base">✈️ Telegram Core &amp; Master Backup Config</h3>
+                        <p class="text-[11px] font-bold opacity-65">Pyrogram API Credentials, Master Backup Channel, Pinned Index &amp; Global Mode</p>
+                    </div>
+                    <div class="flex gap-2 flex-wrap">
+                        <button onclick="saveSettingsSection('telegram_core')" class="btn-p px-4 py-2 text-xs">💾 Save</button>
+                        <button onclick="discardSettingsSection('telegram_core')" class="px-3 py-2 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+                        <button onclick="resetSettingsSection('telegram_core')" class="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 font-black text-xs border-0 cursor-pointer">♻️ Reset Default</button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div class="switch-row">
+                        <span class="text-xs font-black">✈️ Enable Telegram Double Backup</span>
+                        <input id="set_tg_enabled" type="checkbox" class="w-5 h-5 accent-blue-600">
+                    </div>
+                    <div class="switch-row">
+                        <span class="text-xs font-black">📦 Auto-Forward to Master Backup Channel</span>
+                        <input id="set_tg_auto_forward" type="checkbox" class="w-5 h-5 accent-blue-600">
+                    </div>
+                    <div class="switch-row">
+                        <span class="text-xs font-black">📌 Auto-Pinned Course Index Message</span>
+                        <input id="set_tg_pinned_index" type="checkbox" class="w-5 h-5 accent-blue-600">
+                    </div>
+                    <div class="switch-row">
+                        <span class="text-xs font-black">🔢 Sequential Auto-Indexing (001, 002...)</span>
+                        <input id="set_tg_seq_index" type="checkbox" class="w-5 h-5 accent-blue-600">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                    <div>
+                        <label class="font-extrabold opacity-75">Pyrogram API_ID (2GB Upload)</label>
+                        <input id="set_tg_api_id" type="text" class="inp mt-1" placeholder="e.g. 12345678">
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">Pyrogram API_HASH</label>
+                        <input id="set_tg_api_hash" type="text" class="inp mt-1 font-mono" placeholder="32-char API Hash">
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">Global Upload Mode</label>
+                        <select id="set_tg_global_mode" class="inp mt-1">
+                            <option value="both">Both (YouTube + Telegram)</option>
+                            <option value="only_tg">Only Telegram (Superfast)</option>
+                            <option value="only_yt">Only YouTube + Drive</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">Master Backup Channel ID (-100...)</label>
+                        <input id="set_tg_master_ch" type="text" class="inp mt-1 font-mono" placeholder="-1001234567890">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="font-extrabold opacity-75">Admin Telegram Chat IDs (Comma-separated for Alerts, Reports &amp; JSON Backups)</label>
+                        <input id="set_tg_admin_chats" type="text" class="inp mt-1 font-mono" placeholder="123456789, -1009876543210">
+                    </div>
+                </div>
+            </div>
+
+            <!-- MULTI-BOT ROTATION MANAGER -->
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 border-b border-sky-200 pb-3">
+                    <div>
+                        <h3 class="font-black text-base">🤖 Multi-Bot Token Rotation Manager (Anti-Flood)</h3>
+                        <p class="text-[11px] font-bold opacity-65">2–3 Bot Tokens add karein — FloodWait aane par Termux auto-switch kar lega (Sabhi bots ko channels mein Admin banayein)</p>
+                    </div>
+                    <button onclick="clearBotForm()" class="px-3 py-1.5 rounded-xl bg-slate-200 text-slate-800 text-xs font-black border-0 cursor-pointer">+ New Bot</button>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+                    <input id="botEditId" type="hidden">
+                    <div class="sm:col-span-3">
+                        <label class="text-[11px] font-extrabold opacity-75">Bot Label</label>
+                        <input id="botLabel" type="text" class="inp mt-1" placeholder="Bot 1 (Main)">
+                    </div>
+                    <div class="sm:col-span-5">
+                        <label class="text-[11px] font-extrabold opacity-75">Bot Token (BotFather)</label>
+                        <input id="botToken" type="text" class="inp mt-1 font-mono" placeholder="123456:ABC-DEF...">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="text-[11px] font-extrabold opacity-75">Priority Order</label>
+                        <input id="botOrder" type="number" class="inp mt-1" value="1">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <button onclick="saveTgBot()" class="btn-p w-full py-2.5 text-xs">💾 Save Bot</button>
+                    </div>
+                </div>
+
+                <div id="tgBotsList" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+            </div>
+        </section>
+
+        <!-- =========================================================
+             FOLDER 5: CAPTIONS, BRANDING & INLINE BUTTONS EDITOR
+             ========================================================= -->
+        <section id="folder_captions" class="folder-pane hidden space-y-4">
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 border-b border-sky-200 pb-3">
+                    <div>
+                        <h3 class="font-black text-base">📝 Telegram Caption &amp; Branding Editor</h3>
+                        <p class="text-[11px] font-bold opacity-65">Bina code chhede seedha yahan se Video/PDF captions aur apna Branding Tag edit karein</p>
+                    </div>
+                    <div class="flex gap-2 flex-wrap">
+                        <button onclick="saveSettingsSection('captions')" class="btn-p px-4 py-2 text-xs">💾 Save</button>
+                        <button onclick="discardSettingsSection('captions')" class="px-3 py-2 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+                        <button onclick="resetSettingsSection('captions')" class="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 font-black text-xs border-0 cursor-pointer">♻️ Reset Default</button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                        <label class="font-extrabold opacity-75">Custom Branding Tag</label>
+                        <input id="set_cap_brand" type="text" class="inp mt-1" oninput="updateCaptionPreview()" placeholder="RWB / 𝕮𝖍𝖆𝖚𝖉𝖍𝖆𝖗𝖄">
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">Default Channel / Portal Link</label>
+                        <input id="set_cap_link" type="text" class="inp mt-1" oninput="updateCaptionPreview()" placeholder="https://t.me/yourchannel">
+                    </div>
+                </div>
+
+                <div class="space-y-1.5">
+                    <div class="text-[11px] font-extrabold opacity-75">Click to copy placeholder tag:</div>
+                    <div class="flex flex-wrap gap-1.5">
+                        <span class="chip" onclick="copyChip('{course_name}')">{course_name}</span>
+                        <span class="chip" onclick="copyChip('{subject_name}')">{subject_name}</span>
+                        <span class="chip" onclick="copyChip('{topic_name}')">{topic_name}</span>
+                        <span class="chip" onclick="copyChip('{title}')">{title}</span>
+                        <span class="chip" onclick="copyChip('{lecture_id}')">{lecture_id}</span>
+                        <span class="chip" onclick="copyChip('{seq_code}')">{seq_code}</span>
+                        <span class="chip" onclick="copyChip('{date_and_time}')">{date_and_time}</span>
+                        <span class="chip" onclick="copyChip('{branding_tag}')">{branding_tag}</span>
+                        <span class="chip" onclick="copyChip('{channel_link}')">{channel_link}</span>
+                        <span class="chip" onclick="copyChip('{pdf_num}')">{pdf_num}</span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
+                    <div>
+                        <label class="font-extrabold opacity-75">🎬 Video Caption Template</label>
+                        <textarea id="set_cap_video" rows="8" class="inp mt-1 font-mono" oninput="updateCaptionPreview()"></textarea>
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">📄 PDF Caption Template</label>
+                        <textarea id="set_cap_pdf" rows="8" class="inp mt-1 font-mono"></textarea>
+                    </div>
+                </div>
+
+                <div class="p-3.5 rounded-2xl bg-slate-900 text-sky-100 text-xs font-mono whitespace-pre-wrap" id="captionLivePreview">Preview...</div>
+            </div>
+
+            <!-- CUSTOM INLINE BUTTONS -->
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 border-b border-sky-200 pb-3">
+                    <div>
+                        <h3 class="font-black text-base">🔘 Custom Inline Buttons (Under Every TG Post)</h3>
+                        <p class="text-[11px] font-bold opacity-65">Har uploaded Video/PDF ke niche clickable buttons add/edit/remove karein</p>
+                    </div>
+                    <div class="flex gap-2 flex-wrap">
+                        <button onclick="addInlineBtnRow('','')" class="px-3 py-2 rounded-xl bg-emerald-600 text-white font-black text-xs border-0 cursor-pointer">+ Add Button</button>
+                        <button onclick="saveSettingsSection('inline_buttons')" class="btn-p px-4 py-2 text-xs">💾 Save</button>
+                        <button onclick="discardSettingsSection('inline_buttons')" class="px-3 py-2 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+                        <button onclick="resetSettingsSection('inline_buttons')" class="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 font-black text-xs border-0 cursor-pointer">♻️ Reset Default</button>
+                    </div>
+                </div>
+
+                <div class="switch-row">
+                    <span class="text-xs font-black">🔘 Show Inline Buttons Below Uploaded Videos &amp; PDFs</span>
+                    <input id="set_btn_enabled" type="checkbox" class="w-5 h-5 accent-blue-600">
+                </div>
+
+                <div id="inlineButtonsEditor" class="space-y-2"></div>
+            </div>
+        </section>
+
+        <!-- =========================================================
+             FOLDER 6: WATERMARK, 2GB GUARD & PORTAL FALLBACK
+             ========================================================= -->
+        <section id="folder_guards" class="folder-pane hidden space-y-4">
+            <!-- PDF WATERMARK -->
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 border-b border-sky-200 pb-3">
+                    <div>
+                        <h3 class="font-black text-base">💧 Auto PDF Watermark &amp; Branding Stamp</h3>
+                        <p class="text-[11px] font-bold opacity-65">Har PDF upload hone se pehle Termux mein auto-watermark stamp lag jayega</p>
+                    </div>
+                    <div class="flex gap-2 flex-wrap">
+                        <button onclick="saveSettingsSection('watermark')" class="btn-p px-4 py-2 text-xs">💾 Save</button>
+                        <button onclick="discardSettingsSection('watermark')" class="px-3 py-2 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+                        <button onclick="resetSettingsSection('watermark')" class="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 font-black text-xs border-0 cursor-pointer">♻️ Reset Default</button>
+                    </div>
+                </div>
+                <div class="switch-row">
+                    <span class="text-xs font-black">💧 Enable Auto PDF Watermark</span>
+                    <input id="set_wm_enabled" type="checkbox" class="w-5 h-5 accent-blue-600">
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                    <div>
+                        <label class="font-extrabold opacity-75">Main Watermark Text</label>
+                        <input id="set_wm_text" type="text" class="inp mt-1" placeholder="RWB">
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">Sub-Text / Channel Link</label>
+                        <input id="set_wm_sub" type="text" class="inp mt-1" placeholder="@yourchannel">
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">Opacity (0.05 to 0.50)</label>
+                        <input id="set_wm_opacity" type="number" step="0.02" min="0.05" max="0.6" class="inp mt-1">
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">Stamp Color</label>
+                        <input id="set_wm_color" type="color" class="inp mt-1 h-10 p-1">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2GB LIMIT GUARD -->
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 border-b border-sky-200 pb-3">
+                    <div>
+                        <h3 class="font-black text-base">📦 2 GB Limit Guard (Auto-Split / Smart Compress)</h3>
+                        <p class="text-[11px] font-bold opacity-65">Badi 4–5 ghante ki marathon videos fail hone ke bajay auto-split ya compress hongi</p>
+                    </div>
+                    <div class="flex gap-2 flex-wrap">
+                        <button onclick="saveSettingsSection('size_guard')" class="btn-p px-4 py-2 text-xs">💾 Save</button>
+                        <button onclick="discardSettingsSection('size_guard')" class="px-3 py-2 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+                        <button onclick="resetSettingsSection('size_guard')" class="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 font-black text-xs border-0 cursor-pointer">♻️ Reset Default</button>
+                    </div>
+                </div>
+                <div class="switch-row">
+                    <span class="text-xs font-black">📦 Enable 2 GB File Size Guard</span>
+                    <input id="set_sg_enabled" type="checkbox" class="w-5 h-5 accent-blue-600">
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                        <label class="font-extrabold opacity-75">Max File Size Limit (MB) — Telegram Bot Cap: 2000 MB</label>
+                        <input id="set_sg_max_mb" type="number" min="200" max="1990" class="inp mt-1">
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">Action When Video Exceeds Limit</label>
+                        <select id="set_sg_mode" class="inp mt-1">
+                            <option value="split">Auto-Split (Part 1, Part 2 — Fast &amp; Lossless)</option>
+                            <option value="compress">Smart FFmpeg Compress (Single File)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PORTAL YT -> TG FALLBACK -->
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 border-b border-sky-200 pb-3">
+                    <div>
+                        <h3 class="font-black text-base">🔀 Portal YouTube → Telegram Auto Fallback</h3>
+                        <p class="text-[11px] font-bold opacity-65">Agar koi video YT par unavailable ho toh student portal par Telegram Backup button show hoga</p>
+                    </div>
+                    <div class="flex gap-2 flex-wrap">
+                        <button onclick="saveSettingsSection('portal_fallback')" class="btn-p px-4 py-2 text-xs">💾 Save</button>
+                        <button onclick="discardSettingsSection('portal_fallback')" class="px-3 py-2 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+                        <button onclick="resetSettingsSection('portal_fallback')" class="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 font-black text-xs border-0 cursor-pointer">♻️ Reset Default</button>
+                    </div>
+                </div>
+                <div class="switch-row">
+                    <span class="text-xs font-black">🔀 Enable Portal Telegram Fallback Link</span>
+                    <input id="set_pf_enabled" type="checkbox" class="w-5 h-5 accent-blue-600">
+                </div>
+                <div class="text-xs">
+                    <label class="font-extrabold opacity-75">Default Telegram Invite / Backup Channel Link</label>
+                    <input id="set_pf_link" type="text" class="inp mt-1" placeholder="https://t.me/+YourInviteLink">
+                </div>
+            </div>
+        </section>
+
+        <!-- =========================================================
+             FOLDER 7: REMOTE WORKER CONTROL, SPEED & BATTERY/STORAGE GUARDS
+             ========================================================= -->
+        <section id="folder_worker" class="folder-pane hidden space-y-4">
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 border-b border-sky-200 pb-3">
+                    <div>
+                        <h3 class="font-black text-base">📱 Remote Termux Worker Control &amp; Device Guards</h3>
+                        <p class="text-[11px] font-bold opacity-65">Bina phone haath mein liye Pause/Resume, Skip Stuck Class, Download Speed &amp; Storage/Battery Guard control karein</p>
+                    </div>
+                    <div class="flex gap-2 flex-wrap">
+                        <button onclick="saveSettingsSection('worker_control')" class="btn-p px-4 py-2 text-xs">💾 Save</button>
+                        <button onclick="discardSettingsSection('worker_control')" class="px-3 py-2 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+                        <button onclick="resetSettingsSection('worker_control')" class="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 font-black text-xs border-0 cursor-pointer">♻️ Reset Default</button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                    <div class="p-3.5 rounded-2xl bg-sky-50 border border-sky-200 space-y-2">
+                        <div class="font-black">Worker Remote State</div>
+                        <select id="set_wc_state" class="inp">
+                            <option value="RUNNING">▶️ RUNNING (Active)</option>
+                            <option value="PAUSED">⏸ PAUSED (Wait Mode)</option>
+                        </select>
+                    </div>
+                    <div class="p-3.5 rounded-2xl bg-sky-50 border border-sky-200 space-y-2">
+                        <div class="font-black">Download Speed (Parallel Threads)</div>
+                        <select id="set_wc_threads" class="inp">
+                            <option value="4">🐢 4 Threads (Slow Net / Saver)</option>
+                            <option value="8">⚡ 8 Threads (Balanced)</option>
+                            <option value="12">🚀 12 Threads (Fast Default)</option>
+                            <option value="16">🔥 16 Threads (Ultra Fast Wi-Fi)</option>
+                        </select>
+                    </div>
+                    <div class="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 space-y-2">
+                        <div class="font-black text-rose-800">Skip Stuck Lecture ID</div>
+                        <div class="flex gap-1.5">
+                            <input id="set_wc_skip_id" type="text" class="inp" placeholder="e.g. 380188">
+                            <button onclick="skipLectureNow()" class="px-3 py-2 rounded-xl bg-rose-600 text-white font-black text-xs border-0 cursor-pointer shrink-0">⏭️ Skip</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                    <div class="p-4 rounded-2xl bg-white border border-sky-200 space-y-3">
+                        <div class="switch-row">
+                            <span class="font-black">💾 Termux Storage Guard</span>
+                            <input id="set_wc_st_guard" type="checkbox" class="w-5 h-5 accent-blue-600">
+                        </div>
+                        <div>
+                            <label class="font-extrabold opacity-75">Auto-Pause If Free Phone Storage Below (GB)</label>
+                            <input id="set_wc_min_gb" type="number" step="0.5" min="0.5" max="20" class="inp mt-1">
+                        </div>
+                    </div>
+                    <div class="p-4 rounded-2xl bg-white border border-sky-200 space-y-3">
+                        <div class="switch-row">
+                            <span class="font-black">🔋 Termux Battery Guard</span>
+                            <input id="set_wc_bat_guard" type="checkbox" class="w-5 h-5 accent-blue-600">
+                        </div>
+                        <div>
+                            <label class="font-extrabold opacity-75">Auto-Pause If Battery Below (%)</label>
+                            <input id="set_wc_min_bat" type="number" min="5" max="50" class="inp mt-1">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pt-3 border-t border-sky-200 flex flex-wrap gap-2">
+                    <button onclick="retryAllFailedQueue('', 'both')" class="px-3.5 py-2 rounded-xl bg-amber-500 text-white font-black text-xs border-0 cursor-pointer">🔄 Retry All Failed (YT+TG)</button>
+                    <button onclick="retryAllFailedQueue('', 'yt')" class="px-3.5 py-2 rounded-xl bg-red-600 text-white font-black text-xs border-0 cursor-pointer">🔄 Retry YT Failed Only</button>
+                    <button onclick="retryAllFailedQueue('', 'tg')" class="px-3.5 py-2 rounded-xl bg-sky-600 text-white font-black text-xs border-0 cursor-pointer">🔄 Retry TG Failed Only</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- =========================================================
+             FOLDER 8: 1-CLICK CHANNEL RESTORE, RETRY, REPORTS & JSON BACKUP
+             ========================================================= -->
+        <section id="folder_backup" class="folder-pane hidden space-y-4">
+            <!-- 1-CLICK CHANNEL RESTORE -->
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="border-b border-sky-200 pb-3">
+                    <h3 class="font-black text-base">♻️ 1-Click Channel Restore (From Master Backup Channel)</h3>
+                    <p class="text-[11px] font-bold opacity-65">Agar koi course channel copyright se delete ho jaye, toh naya Channel ID dalein — bina 1 MB download kiye Master Backup se saari classes copy ho jayengi</p>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-xs items-end">
+                    <div>
+                        <label class="font-extrabold opacity-75">Select Course</label>
+                        <select id="rstCourseSelect" class="inp mt-1"></select>
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">New Target Channel ID</label>
+                        <input id="rstTargetCh" type="text" class="inp mt-1 font-mono" placeholder="-1001234567890">
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">Subject ID (Optional)</label>
+                        <input id="rstSubId" type="text" class="inp mt-1" placeholder="Blank = Full Course">
+                    </div>
+                    <div>
+                        <label class="font-extrabold opacity-75">Forum Topic ID (Optional)</label>
+                        <input id="rstTopicId" type="text" class="inp mt-1" placeholder="Optional Thread ID">
+                    </div>
+                    <div>
+                        <button onclick="createRestoreJob()" class="btn-p w-full py-2.5 text-xs">🚀 Start Restore</button>
+                    </div>
+                </div>
+                <div id="restoreJobsList" class="space-y-2 text-xs"></div>
+            </div>
+
+            <!-- AUTO-RETRY, DAILY REPORT & AUTO JSON BACKUP SETTINGS -->
+            <div class="glass rounded-2xl p-5 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 border-b border-sky-200 pb-3">
+                    <div>
+                        <h3 class="font-black text-base">⏰ Auto-Retry Cooldown, Daily Reports &amp; Auto JSON Backup</h3>
+                        <p class="text-[11px] font-bold opacity-65">Network glitch auto-retry, raat ki daily report aur Telegram par MongoDB JSON backup</p>
+                    </div>
+                    <div class="flex gap-2 flex-wrap">
+                        <button onclick="saveSettingsSection('retry_and_reports')" class="btn-p px-4 py-2 text-xs">💾 Save</button>
+                        <button onclick="discardSettingsSection('retry_and_reports')" class="px-3 py-2 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+                        <button onclick="resetSettingsSection('retry_and_reports')" class="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 font-black text-xs border-0 cursor-pointer">♻️ Reset Default</button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                    <div class="p-3.5 rounded-2xl bg-white border border-sky-200 space-y-2.5">
+                        <div class="switch-row">
+                            <span class="font-black">🔁 Smart Auto-Retry</span>
+                            <input id="set_rr_retry_en" type="checkbox" class="w-5 h-5 accent-blue-600">
+                        </div>
+                        <div>
+                            <label class="font-extrabold opacity-75">Max Auto Retries</label>
+                            <input id="set_rr_max_r" type="number" min="1" max="10" class="inp mt-1">
+                        </div>
+                        <div>
+                            <label class="font-extrabold opacity-75">Cooldown Wait (Minutes)</label>
+                            <input id="set_rr_cool" type="number" min="1" max="120" class="inp mt-1">
+                        </div>
+                    </div>
+
+                    <div class="p-3.5 rounded-2xl bg-white border border-sky-200 space-y-2.5">
+                        <div class="switch-row">
+                            <span class="font-black">📊 Daily TG Report</span>
+                            <input id="set_rr_rep_en" type="checkbox" class="w-5 h-5 accent-blue-600">
+                        </div>
+                        <div>
+                            <label class="font-extrabold opacity-75">Report Hour (IST 0–23)</label>
+                            <input id="set_rr_rep_hr" type="number" min="0" max="23" class="inp mt-1">
+                        </div>
+                        <button onclick="sendReportNow()" class="w-full py-2 rounded-xl bg-indigo-600 text-white font-black text-xs border-0 cursor-pointer">📤 Send Report Now</button>
+                    </div>
+
+                    <div class="p-3.5 rounded-2xl bg-white border border-sky-200 space-y-2.5">
+                        <div class="switch-row">
+                            <span class="font-black">💾 Auto JSON Backup</span>
+                            <input id="set_rr_bk_en" type="checkbox" class="w-5 h-5 accent-blue-600">
+                        </div>
+                        <div>
+                            <label class="font-extrabold opacity-75">Backup Every N Uploads</label>
+                            <input id="set_rr_bk_n" type="number" min="5" max="500" class="inp mt-1">
+                        </div>
+                        <div>
+                            <label class="font-extrabold opacity-75">Backup Every Hours</label>
+                            <input id="set_rr_bk_hr" type="number" min="1" max="168" class="inp mt-1">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pt-3 border-t border-sky-200 flex flex-wrap items-center gap-2">
+                    <button onclick="sendJsonBackupToTg()" class="px-4 py-2.5 rounded-xl bg-sky-600 text-white font-black text-xs border-0 cursor-pointer">✈️ Send JSON Backup to Telegram Now</button>
+                    <button onclick="downloadJsonBackup()" class="px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-black text-xs border-0 cursor-pointer">⬇️ Download JSON Backup</button>
+                    <label class="px-4 py-2.5 rounded-xl bg-slate-800 text-white font-black text-xs cursor-pointer">
+                        ⬆️ Import &amp; Restore JSON
+                        <input id="jsonImportInput" type="file" accept=".json" class="hidden" onchange="importJsonBackupFile(this)">
+                    </label>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- COURSE TG CHANNEL & SETTINGS MODAL -->
+    <div id="courseSettingsModal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="glass max-w-md w-full rounded-3xl p-6 space-y-3 text-xs">
+            <div class="flex justify-between items-center border-b border-sky-200 pb-2">
+                <h3 id="csModalTitle" class="font-black text-base truncate">✈️ Course Channel &amp; Controls</h3>
+                <button onclick="closeCourseSettingsModal()" class="text-rose-600 font-black text-lg bg-transparent border-0 cursor-pointer">✕</button>
+            </div>
+            <input id="csCourseId" type="hidden">
+            <div>
+                <label class="font-extrabold opacity-75">Course Telegram Channel ID (-100...)</label>
+                <input id="csTgChId" type="text" class="inp mt-1 font-mono" placeholder="-1001234567890">
+            </div>
+            <div>
+                <label class="font-extrabold opacity-75">Course Telegram Invite / Public Link</label>
+                <input id="csTgChLink" type="text" class="inp mt-1" placeholder="https://t.me/... (for Portal Fallback &amp; Index)">
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <div>
+                    <label class="font-extrabold opacity-75">Upload Mode</label>
+                    <select id="csUploadMode" class="inp mt-1">
+                        <option value="both">Both (YT + TG)</option>
+                        <option value="only_tg">Only Telegram</option>
+                        <option value="only_yt">Only YouTube</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="font-extrabold opacity-75">Queue Priority</label>
+                    <select id="csPriority" class="inp mt-1">
+                        <option value="normal">Normal</option>
+                        <option value="high">🔥 High Priority</option>
+                    </select>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <div>
+                    <label class="font-extrabold opacity-75">Portal Playback Mode</label>
+                    <select id="csPlaybackMode" class="inp mt-1">
+                        <option value="vault_first">☁️ YT + Drive</option>
+                        <option value="hls_live">📡 Live HLS</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="font-extrabold opacity-75">Pinned Index Msg ID</label>
+                    <input id="csIndexMsgId" type="text" class="inp mt-1 font-mono" placeholder="Auto">
+                </div>
+            </div>
+            <div class="flex gap-2 pt-1">
+                <button onclick="saveCourseSettings()" class="btn-p flex-1 py-2.5 text-xs">💾 Save Course Settings</button>
+                <button onclick="closeCourseSettingsModal()" class="px-4 py-2.5 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+            </div>
         </div>
     </div>
 
-    <!-- MANUAL OVERRIDE MODAL -->
+    <!-- SUBJECT CHANNEL OVERRIDE / FORUM TOPIC MODAL -->
+    <div id="subjectSettingsModal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="glass max-w-md w-full rounded-3xl p-6 space-y-3 text-xs">
+            <div class="flex justify-between items-center border-b border-sky-200 pb-2">
+                <h3 id="ssModalTitle" class="font-black text-base truncate">📚 Subject TG Channel / Forum Topic</h3>
+                <button onclick="closeSubjectSettingsModal()" class="text-rose-600 font-black text-lg bg-transparent border-0 cursor-pointer">✕</button>
+            </div>
+            <input id="ssCourseId" type="hidden">
+            <input id="ssSubjectId" type="hidden">
+            <div>
+                <label class="font-extrabold opacity-75">Subject Channel Override ID (Blank = Course Main Channel)</label>
+                <input id="ssTgChId" type="text" class="inp mt-1 font-mono" placeholder="-100... (Optional)">
+            </div>
+            <div>
+                <label class="font-extrabold opacity-75">Telegram Forum Topic / Thread ID (Optional)</label>
+                <input id="ssTgTopicId" type="text" class="inp mt-1 font-mono" placeholder="e.g. 42 (for Supergroup Topics)">
+            </div>
+            <div class="flex gap-2 pt-1">
+                <button onclick="saveSubjectSettings()" class="btn-p flex-1 py-2.5 text-xs">💾 Save Subject TG</button>
+                <button onclick="closeSubjectSettingsModal()" class="px-4 py-2.5 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MANUAL LECTURE OVERRIDE MODAL -->
     <div id="overrideModal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-        <div class="glass max-w-md w-full rounded-3xl p-6 space-y-3">
+        <div class="glass max-w-md w-full rounded-3xl p-6 space-y-2.5 text-xs">
             <div class="flex justify-between items-center border-b border-sky-200 pb-2">
                 <h3 id="ovTitle" class="font-black text-base truncate">Edit Lecture Links</h3>
                 <button onclick="closeOverrideModal()" class="text-rose-600 font-black text-lg bg-transparent border-0 cursor-pointer">✕</button>
@@ -187,9 +834,17 @@
             <input id="ovLecId" type="hidden">
             <input id="ovYtId" type="text" placeholder="YouTube Video ID or URL" class="inp">
             <input id="ovPdf1" type="text" placeholder="Google Drive PDF 1 ID or Link" class="inp">
-            <input id="ovPdf2" type="text" placeholder="Google Drive PDF 2 ID or Link (Optional)" class="inp">
-            <input id="ovThumb" type="text" placeholder="Google Drive Thumbnail ID or Link (Optional)" class="inp">
-            <button onclick="saveLectureOverride()" class="btn-p w-full py-2.5 text-xs">💾 Save & Activate Immediately</button>
+            <input id="ovPdf2" type="text" placeholder="Google Drive PDF 2 ID or Link" class="inp">
+            <input id="ovThumb" type="text" placeholder="Google Drive Thumbnail ID or Link" class="inp">
+            <div class="grid grid-cols-3 gap-2 pt-1">
+                <input id="ovTgVid" type="text" placeholder="TG Vid Msg ID" class="inp font-mono">
+                <input id="ovTgP1" type="text" placeholder="TG PDF1 Msg" class="inp font-mono">
+                <input id="ovTgP2" type="text" placeholder="TG PDF2 Msg" class="inp font-mono">
+            </div>
+            <div class="flex gap-2 pt-1">
+                <button onclick="saveLectureOverride()" class="btn-p flex-1 py-2.5 text-xs">💾 Save &amp; Activate</button>
+                <button onclick="closeOverrideModal()" class="px-4 py-2.5 rounded-xl bg-slate-200 text-slate-800 font-black text-xs border-0 cursor-pointer">↩️ Unsave</button>
+            </div>
         </div>
     </div>
 
@@ -199,12 +854,15 @@
         let cv = {
             apiBase: DEFAULT_COURSE_API_BASE,
             key: sessionStorage.getItem("rwa_cv_admin_key") || "",
+            activeFolder: "dashboard",
             view: "courses",
             courseId: "", courseName: "",
             subjectId: "", subjectName: "",
             topicId: "", topicName: "",
             verifiedToken: "",
             verifiedUid: "",
+            settings: {},
+            coursesCache: [],
             pollId: null
         };
 
@@ -248,6 +906,20 @@
             return { ok: res.ok, data };
         }
 
+        function openFeatureFolder(name) {
+            cv.activeFolder = name;
+            document.querySelectorAll(".folder-pane").forEach(p => p.classList.add("hidden"));
+            document.querySelectorAll(".folder-tab").forEach(b => b.classList.remove("active"));
+            const pane = document.getElementById(`folder_${name}`);
+            const btn = document.getElementById(`ftab_${name}`);
+            if (pane) pane.classList.remove("hidden");
+            if (btn) btn.classList.add("active");
+
+            if (name === "courses" && cv.view === "courses") loadMirrorCourses();
+            if (name === "telegram") loadTgBots();
+            if (name === "backup") { loadRestoreJobs(); populateRestoreCourseDropdown(); }
+        }
+
         async function unlockCourseAdmin() {
             const urlVal = document.getElementById("cvApiUrlInput").value.trim().replace(/\/$/, "");
             const keyVal = document.getElementById("cvAdminKeyInput").value.trim();
@@ -263,7 +935,7 @@
                     document.getElementById("cvMainApp").classList.remove("hidden");
                     refreshAllCourseVault();
                     startLivePolling();
-                    toast("🔓 Course Vault Unlocked!", "success");
+                    toast("🔓 Command Center Unlocked!", "success");
                 } else {
                     err.textContent = res.data.message || "Invalid Key!";
                     err.classList.remove("hidden");
@@ -283,7 +955,7 @@
 
         function startLivePolling() {
             if (cv.pollId) clearInterval(cv.pollId);
-            cv.pollId = setInterval(pollStatusOnly, 4000);
+            cv.pollId = setInterval(pollStatusOnly, 5000);
         }
 
         async function pollStatusOnly() {
@@ -297,14 +969,426 @@
         }
 
         async function refreshAllCourseVault() {
-            await pollStatusOnly();
-            await loadScannerTokens();
+            await Promise.all([
+                pollStatusOnly(),
+                loadAllSettings(),
+                loadScannerTokens(),
+                loadTgBots(),
+                loadRestoreJobs()
+            ]);
             if (cv.view === "courses") await loadMirrorCourses();
             else if (cv.view === "subjects") await openMirrorCourse(cv.courseId, cv.courseName);
             else if (cv.view === "topics") await openMirrorSubject(cv.subjectId, cv.subjectName);
             else if (cv.view === "lectures") await openMirrorTopic(cv.topicId, cv.topicName);
         }
 
+        // =========================================================
+        // MASTER SETTINGS (LOAD / EDIT / SAVE / UNSAVE / RESET)
+        // =========================================================
+        async function loadAllSettings() {
+            try {
+                const r = await api("/api/admin/settings");
+                if (r.ok && r.data.settings) {
+                    cv.settings = r.data.settings;
+                    applySettingsToForms();
+                }
+            } catch {}
+        }
+
+        function applySettingsToForms(onlySection = "") {
+            const s = cv.settings || {};
+            if (!onlySection || onlySection === "telegram_core") {
+                const tc = s.telegram_core || {};
+                document.getElementById("set_tg_enabled").checked = tc.enabled !== false;
+                document.getElementById("set_tg_auto_forward").checked = tc.auto_forward_master !== false;
+                document.getElementById("set_tg_pinned_index").checked = tc.auto_pinned_index !== false;
+                document.getElementById("set_tg_seq_index").checked = tc.sequential_indexing !== false;
+                document.getElementById("set_tg_api_id").value = tc.api_id || "";
+                document.getElementById("set_tg_api_hash").value = tc.api_hash || "";
+                document.getElementById("set_tg_global_mode").value = tc.global_upload_mode || "both";
+                document.getElementById("set_tg_master_ch").value = tc.master_backup_channel_id || "";
+                document.getElementById("set_tg_admin_chats").value = tc.admin_chat_ids || "";
+            }
+            if (!onlySection || onlySection === "captions") {
+                const cap = s.captions || {};
+                document.getElementById("set_cap_brand").value = cap.branding_tag || "RWB";
+                document.getElementById("set_cap_link").value = cap.channel_link || "";
+                document.getElementById("set_cap_video").value = cap.video_template || "";
+                document.getElementById("set_cap_pdf").value = cap.pdf_template || "";
+                updateCaptionPreview();
+            }
+            if (!onlySection || onlySection === "inline_buttons") {
+                const ib = s.inline_buttons || {};
+                document.getElementById("set_btn_enabled").checked = Boolean(ib.enabled);
+                const box = document.getElementById("inlineButtonsEditor");
+                box.innerHTML = "";
+                (ib.buttons || []).forEach(b => addInlineBtnRow(b.text || "", b.url || ""));
+            }
+            if (!onlySection || onlySection === "watermark") {
+                const wm = s.watermark || {};
+                document.getElementById("set_wm_enabled").checked = Boolean(wm.enabled);
+                document.getElementById("set_wm_text").value = wm.text || "RWB";
+                document.getElementById("set_wm_sub").value = wm.sub_text || "";
+                document.getElementById("set_wm_opacity").value = wm.opacity ?? 0.18;
+                document.getElementById("set_wm_color").value = wm.color || "#64748b";
+            }
+            if (!onlySection || onlySection === "size_guard") {
+                const sg = s.size_guard || {};
+                document.getElementById("set_sg_enabled").checked = sg.enabled !== false;
+                document.getElementById("set_sg_max_mb").value = sg.max_mb || 1950;
+                document.getElementById("set_sg_mode").value = sg.mode || "split";
+            }
+            if (!onlySection || onlySection === "portal_fallback") {
+                const pf = s.portal_fallback || {};
+                document.getElementById("set_pf_enabled").checked = pf.tg_fallback_enabled !== false;
+                document.getElementById("set_pf_link").value = pf.default_tg_invite_link || "";
+            }
+            if (!onlySection || onlySection === "worker_control") {
+                const wc = s.worker_control || {};
+                document.getElementById("set_wc_state").value = wc.state || "RUNNING";
+                document.getElementById("set_wc_threads").value = String(wc.download_threads || 12);
+                document.getElementById("set_wc_skip_id").value = wc.skip_lecture_id || "";
+                document.getElementById("set_wc_st_guard").checked = wc.storage_guard_enabled !== false;
+                document.getElementById("set_wc_min_gb").value = wc.min_free_gb ?? 2.0;
+                document.getElementById("set_wc_bat_guard").checked = wc.battery_guard_enabled !== false;
+                document.getElementById("set_wc_min_bat").value = wc.min_battery_pct ?? 15;
+            }
+            if (!onlySection || onlySection === "retry_and_reports") {
+                const rr = s.retry_and_reports || {};
+                document.getElementById("set_rr_retry_en").checked = rr.auto_retry_enabled !== false;
+                document.getElementById("set_rr_max_r").value = rr.max_retries ?? 3;
+                document.getElementById("set_rr_cool").value = rr.retry_cooldown_mins ?? 10;
+                document.getElementById("set_rr_rep_en").checked = rr.daily_report_enabled !== false;
+                document.getElementById("set_rr_rep_hr").value = rr.daily_report_hour_ist ?? 22;
+                document.getElementById("set_rr_bk_en").checked = rr.auto_json_backup_enabled !== false;
+                document.getElementById("set_rr_bk_n").value = rr.backup_every_uploads ?? 50;
+                document.getElementById("set_rr_bk_hr").value = rr.backup_interval_hours ?? 24;
+            }
+        }
+
+        function collectSectionPayload(sec) {
+            if (sec === "telegram_core") {
+                return {
+                    enabled: document.getElementById("set_tg_enabled").checked,
+                    auto_forward_master: document.getElementById("set_tg_auto_forward").checked,
+                    auto_pinned_index: document.getElementById("set_tg_pinned_index").checked,
+                    sequential_indexing: document.getElementById("set_tg_seq_index").checked,
+                    api_id: document.getElementById("set_tg_api_id").value.trim(),
+                    api_hash: document.getElementById("set_tg_api_hash").value.trim(),
+                    global_upload_mode: document.getElementById("set_tg_global_mode").value,
+                    master_backup_channel_id: document.getElementById("set_tg_master_ch").value.trim(),
+                    admin_chat_ids: document.getElementById("set_tg_admin_chats").value.trim()
+                };
+            }
+            if (sec === "captions") {
+                return {
+                    branding_tag: document.getElementById("set_cap_brand").value.trim(),
+                    channel_link: document.getElementById("set_cap_link").value.trim(),
+                    video_template: document.getElementById("set_cap_video").value,
+                    pdf_template: document.getElementById("set_cap_pdf").value
+                };
+            }
+            if (sec === "inline_buttons") {
+                const btns = [];
+                document.querySelectorAll("#inlineButtonsEditor .ib-row").forEach(row => {
+                    const t = row.querySelector(".ib-text").value.trim();
+                    const u = row.querySelector(".ib-url").value.trim();
+                    if (t && u) btns.push({ text: t, url: u });
+                });
+                return { enabled: document.getElementById("set_btn_enabled").checked, buttons: btns };
+            }
+            if (sec === "watermark") {
+                return {
+                    enabled: document.getElementById("set_wm_enabled").checked,
+                    text: document.getElementById("set_wm_text").value.trim(),
+                    sub_text: document.getElementById("set_wm_sub").value.trim(),
+                    opacity: parseFloat(document.getElementById("set_wm_opacity").value) || 0.18,
+                    color: document.getElementById("set_wm_color").value
+                };
+            }
+            if (sec === "size_guard") {
+                return {
+                    enabled: document.getElementById("set_sg_enabled").checked,
+                    max_mb: parseInt(document.getElementById("set_sg_max_mb").value) || 1950,
+                    mode: document.getElementById("set_sg_mode").value
+                };
+            }
+            if (sec === "portal_fallback") {
+                return {
+                    tg_fallback_enabled: document.getElementById("set_pf_enabled").checked,
+                    default_tg_invite_link: document.getElementById("set_pf_link").value.trim()
+                };
+            }
+            if (sec === "worker_control") {
+                return {
+                    state: document.getElementById("set_wc_state").value,
+                    download_threads: parseInt(document.getElementById("set_wc_threads").value) || 12,
+                    skip_lecture_id: document.getElementById("set_wc_skip_id").value.trim(),
+                    storage_guard_enabled: document.getElementById("set_wc_st_guard").checked,
+                    min_free_gb: parseFloat(document.getElementById("set_wc_min_gb").value) || 2.0,
+                    battery_guard_enabled: document.getElementById("set_wc_bat_guard").checked,
+                    min_battery_pct: parseInt(document.getElementById("set_wc_min_bat").value) || 15
+                };
+            }
+            if (sec === "retry_and_reports") {
+                return {
+                    auto_retry_enabled: document.getElementById("set_rr_retry_en").checked,
+                    max_retries: parseInt(document.getElementById("set_rr_max_r").value) || 3,
+                    retry_cooldown_mins: parseInt(document.getElementById("set_rr_cool").value) || 10,
+                    daily_report_enabled: document.getElementById("set_rr_rep_en").checked,
+                    daily_report_hour_ist: parseInt(document.getElementById("set_rr_rep_hr").value) || 22,
+                    auto_json_backup_enabled: document.getElementById("set_rr_bk_en").checked,
+                    backup_every_uploads: parseInt(document.getElementById("set_rr_bk_n").value) || 50,
+                    backup_interval_hours: parseInt(document.getElementById("set_rr_bk_hr").value) || 24
+                };
+            }
+            return {};
+        }
+
+        async function saveSettingsSection(sec) {
+            const payload = {};
+            payload[sec] = collectSectionPayload(sec);
+            const r = await api("/api/admin/settings", "POST", payload);
+            if (r.ok && r.data.settings) {
+                cv.settings = r.data.settings;
+                applySettingsToForms(sec);
+                toast(`✅ Saved ${sec.replace(/_/g, " ")}!`, "success");
+            } else {
+                toast("Save failed.", "error");
+            }
+        }
+
+        function discardSettingsSection(sec) {
+            applySettingsToForms(sec);
+            toast("↩️ Unsaved changes reverted!", "info");
+        }
+
+        async function resetSettingsSection(sec) {
+            if (!confirm(`Kya aap ${sec} settings ko default par reset karna chahte hain?`)) return;
+            const r = await api("/api/admin/settings/reset", "POST", { section: sec });
+            if (r.ok && r.data.settings) {
+                cv.settings = r.data.settings;
+                applySettingsToForms(sec);
+                toast(`♻️ Reset ${sec} to defaults!`, "warning");
+            }
+        }
+
+        // =========================================================
+        // CAPTIONS PREVIEW & INLINE BUTTON ROWS
+        // =========================================================
+        function copyChip(txt) {
+            navigator.clipboard?.writeText(txt);
+            toast(`Copied ${txt}`, "info");
+        }
+
+        function updateCaptionPreview() {
+            const tpl = document.getElementById("set_cap_video").value || "";
+            const sample = {
+                course_name: "SSC GD भर्ती 2027 (वीर बैच)",
+                subject_name: "Current Affairs (आदर्श सर)",
+                topic_name: "Weekly Revision",
+                title: "Monthly Current Affairs 2026",
+                lecture_id: "374320",
+                seq_code: "001",
+                date_and_time: "27-11-2026 02:00 PM",
+                branding_tag: document.getElementById("set_cap_brand").value || "RWB",
+                channel_link: document.getElementById("set_cap_link").value || "https://t.me/example",
+                pdf_num: "1"
+            };
+            let out = tpl;
+            Object.keys(sample).forEach(k => { out = out.split(`{${k}}`).join(sample[k]); });
+            document.getElementById("captionLivePreview").textContent = out;
+        }
+
+        function addInlineBtnRow(text = "", url = "") {
+            const box = document.getElementById("inlineButtonsEditor");
+            const div = document.createElement("div");
+            div.className = "ib-row grid grid-cols-1 sm:grid-cols-12 gap-2 items-center";
+            div.innerHTML = `
+                <input type="text" class="inp ib-text sm:col-span-4" placeholder="Button Label (e.g. 🌐 Open Portal)" value="${esc(text)}">
+                <input type="url" class="inp ib-url sm:col-span-7" placeholder="https://..." value="${esc(url)}">
+                <button onclick="this.parentElement.remove()" class="sm:col-span-1 py-2 rounded-xl bg-rose-100 text-rose-700 font-black text-xs border-0 cursor-pointer">✕</button>`;
+            box.appendChild(div);
+        }
+
+        // =========================================================
+        // MULTI-BOT MANAGER
+        // =========================================================
+        async function loadTgBots() {
+            try {
+                const r = await api("/api/admin/tg_bots");
+                const list = (r.data && r.data.bots) || [];
+                const box = document.getElementById("tgBotsList");
+                if (!list.length) {
+                    box.innerHTML = `<div class="col-span-full p-4 rounded-xl bg-amber-50 text-amber-900 text-xs font-bold">Abhi koi Telegram Bot add nahi hai. Upar Bot Token daal kar Save karein.</div>`;
+                    return;
+                }
+                const nowSec = Math.floor(Date.now() / 1000);
+                box.innerHTML = list.map(b => {
+                    const floodRem = Math.max(0, (b.flood_until_ts || 0) - nowSec);
+                    const masked = b.token ? `${b.token.slice(0, 12)}...${b.token.slice(-6)}` : "";
+                    return `
+                    <div class="p-3.5 rounded-2xl bg-white border-2 ${b.active ? "border-sky-200" : "border-slate-200 opacity-65"} space-y-2 text-xs">
+                        <div class="flex justify-between items-center gap-2">
+                            <div class="font-black truncate">🤖 #${b.order || 0} ${esc(b.label)}</div>
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-black ${floodRem > 0 ? "bg-amber-100 text-amber-800" : (b.active ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600")}">
+                                ${floodRem > 0 ? `⏳ Flood ${floodRem}s` : (b.active ? "🟢 ACTIVE" : "⚪ PAUSED")}
+                            </span>
+                        </div>
+                        <div class="font-mono text-[11px] opacity-70 truncate">${esc(masked)}</div>
+                        <div class="text-[11px] font-bold opacity-75">📤 Uploads: ${b.uploads_count || 0} ${b.last_error ? `• ⚠️ ${esc(b.last_error)}` : ""}</div>
+                        <div class="flex gap-1.5 pt-1">
+                            <button onclick='editBotRow(${JSON.stringify({id:b.bot_id,label:b.label,token:b.token,order:b.order||0})})' class="flex-1 py-1.5 rounded-xl bg-sky-100 text-sky-900 font-black text-[11px] border-0 cursor-pointer">✏️ Edit</button>
+                            <button onclick="toggleTgBot('${esc(b.bot_id)}', ${!b.active})" class="flex-1 py-1.5 rounded-xl ${b.active ? "bg-amber-500" : "bg-emerald-600"} text-white font-black text-[11px] border-0 cursor-pointer">${b.active ? "⏸ Pause" : "▶️ Enable"}</button>
+                            <button onclick="deleteTgBot('${esc(b.bot_id)}')" class="px-3 py-1.5 rounded-xl bg-rose-600 text-white font-black text-[11px] border-0 cursor-pointer">🗑</button>
+                        </div>
+                    </div>`;
+                }).join("");
+            } catch {}
+        }
+
+        function editBotRow(b) {
+            document.getElementById("botEditId").value = b.id || "";
+            document.getElementById("botLabel").value = b.label || "";
+            document.getElementById("botToken").value = b.token || "";
+            document.getElementById("botOrder").value = b.order || 1;
+            toast("Editing Bot — Save dabakar update karein", "info");
+        }
+        function clearBotForm() {
+            document.getElementById("botEditId").value = "";
+            document.getElementById("botLabel").value = "";
+            document.getElementById("botToken").value = "";
+            document.getElementById("botOrder").value = 1;
+        }
+        async function saveTgBot() {
+            const tok = document.getElementById("botToken").value.trim();
+            if (!tok) return toast("Bot Token dalein.", "warning");
+            const r = await api("/api/admin/tg_bots", "POST", {
+                bot_id: document.getElementById("botEditId").value.trim(),
+                label: document.getElementById("botLabel").value.trim() || "TG Bot",
+                token: tok,
+                order: parseInt(document.getElementById("botOrder").value) || 1,
+                active: true
+            });
+            if (r.ok) { clearBotForm(); loadTgBots(); toast("✅ Telegram Bot Saved!", "success"); }
+            else toast("Bot save failed.", "error");
+        }
+        async function toggleTgBot(botId, active) {
+            const r = await api("/api/admin/tg_bots/toggle", "POST", { bot_id: botId, active });
+            if (r.ok) { loadTgBots(); toast(active ? "▶️ Bot Enabled" : "⏸ Bot Paused", "info"); }
+        }
+        async function deleteTgBot(botId) {
+            if (!confirm("Kya aap is Bot ko delete karna chahte hain?")) return;
+            const r = await api("/api/admin/tg_bots", "DELETE", { bot_id: botId });
+            if (r.ok) { loadTgBots(); toast("🗑 Bot Deleted", "info"); }
+        }
+
+        // =========================================================
+        // REMOTE WORKER QUICK ACTIONS
+        // =========================================================
+        async function quickWorkerState(st) {
+            const r = await api("/api/admin/worker/control", "POST", { state: st });
+            if (r.ok) {
+                toast(st === "PAUSED" ? "⏸ Termux Worker Paused!" : "▶️ Termux Worker Resumed!", "success");
+                loadAllSettings();
+                pollStatusOnly();
+            }
+        }
+        async function skipLectureNow() {
+            const lid = document.getElementById("set_wc_skip_id").value.trim();
+            if (!lid) return toast("Lecture ID dalein jisko skip karna hai.", "warning");
+            const r = await api("/api/admin/worker/control", "POST", { skip_lecture_id: lid });
+            if (r.ok) toast(`⏭️ Skip signal sent for Class #${lid}!`, "warning");
+        }
+
+        // =========================================================
+        // 1-CLICK RESTORE & JSON BACKUP
+        // =========================================================
+        function populateRestoreCourseDropdown() {
+            const sel = document.getElementById("rstCourseSelect");
+            if (!sel) return;
+            sel.innerHTML = (cv.coursesCache || []).map(c => `<option value="${esc(c.course_id)}">#${esc(c.course_id)} — ${esc(c.course_name)}</option>`).join("") || `<option value="">No courses archived</option>`;
+        }
+
+        async function loadRestoreJobs() {
+            try {
+                const r = await api("/api/admin/restore_jobs");
+                const list = (r.data && r.data.jobs) || [];
+                const box = document.getElementById("restoreJobsList");
+                box.innerHTML = list.map(j => `
+                    <div class="p-3 rounded-xl bg-sky-50 border border-sky-200 flex flex-wrap justify-between items-center gap-2">
+                        <div>
+                            <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[10px] font-black uppercase">${esc(j.status)}</span>
+                            <span class="font-black ml-1">Batch #${esc(j.course_id)} → ${esc(j.target_channel_id)}</span>
+                            ${j.subject_id ? `<span class="opacity-70 ml-1">(Sub #${esc(j.subject_id)})</span>` : ""}
+                            ${j.error ? `<div class="text-rose-600 font-bold mt-0.5">${esc(j.error)}</div>` : ""}
+                        </div>
+                        <div class="font-black text-emerald-700">${j.done_count || 0} / ${j.total_count || 0} Copied • <span class="opacity-60 font-bold">${esc(j.updated_at || "")}</span></div>
+                    </div>`).join("") || `<div class="opacity-65 font-bold">Abhi koi channel restore job nahi chala hai.</div>`;
+            } catch {}
+        }
+
+        async function createRestoreJob() {
+            const cid = document.getElementById("rstCourseSelect").value;
+            const tch = document.getElementById("rstTargetCh").value.trim();
+            if (!cid || !tch) return toast("Course aur New Target Channel ID dalein.", "warning");
+            const r = await api("/api/admin/restore_jobs/create", "POST", {
+                course_id: cid,
+                target_channel_id: tch,
+                subject_id: document.getElementById("rstSubId").value.trim(),
+                target_topic_id: document.getElementById("rstTopicId").value.trim()
+            });
+            if (r.ok) {
+                toast("♻️ Restore Job Queued! Termux turant Master Backup se copy karega.", "success");
+                loadRestoreJobs();
+            } else toast(r.data.message || "Restore create failed", "error");
+        }
+
+        async function sendJsonBackupToTg() {
+            toast("⏳ Sending JSON Backup to Telegram...", "info");
+            const r = await api("/api/admin/backup/send_tg", "POST", {});
+            toast(r.data.message || "Done", r.ok ? "success" : "error");
+        }
+
+        async function sendReportNow() {
+            const r = await api("/api/admin/report/send_now", "POST", {});
+            toast(r.data.message || "Done", r.ok ? "success" : "error");
+        }
+
+        async function downloadJsonBackup() {
+            try {
+                const res = await fetch(`${cv.apiBase.replace(/\/$/, "")}/api/admin/backup/export`, {
+                    headers: { "X-Course-Admin-Key": cv.key }
+                });
+                if (!res.ok) return toast("Backup download failed", "error");
+                const blob = await res.blob();
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `RWA_Vault_Backup_${Date.now()}.json`;
+                document.body.appendChild(a); a.click(); a.remove();
+                toast("⬇️ JSON Backup Downloaded!", "success");
+            } catch { toast("Download error", "error"); }
+        }
+
+        async function importJsonBackupFile(inp) {
+            const f = inp.files && inp.files[0];
+            if (!f) return;
+            if (!confirm(`Kya aap "${f.name}" se MongoDB database restore karna chahte hain?`)) { inp.value = ""; return; }
+            try {
+                const json = JSON.parse(await f.text());
+                const r = await api("/api/admin/backup/import", "POST", json);
+                if (r.ok) {
+                    const c = r.data.restored || {};
+                    toast(`✅ Restored: ${c.courses||0} batches, ${c.lectures||0} classes, ${c.bots||0} bots!`, "success");
+                    refreshAllCourseVault();
+                } else toast(r.data.message || "Import failed", "error");
+            } catch { toast("Invalid JSON file!", "error"); }
+            inp.value = "";
+        }
+
+        // =========================================================
+        // TOKEN VERIFY, SCANNER & SUMMARY RENDERING (OLD + NEW)
+        // =========================================================
         async function verifyAndLoadTokenCourses() {
             const rawTok = document.getElementById("tkVal").value.trim();
             const btn = document.getElementById("btnVerifyToken");
@@ -324,7 +1408,7 @@
                     badge.className = "px-3 py-1 rounded-full bg-rose-100 text-rose-800 text-xs font-black";
                     badge.textContent = "❌ " + (r.data.message || "Token Invalid!");
                     document.getElementById("verifiedCoursesWrap").classList.add("hidden");
-                    toast(r.data.message || "Token invalid ya expired hai!", "error");
+                    toast(r.data.message || "Token invalid!", "error");
                     return;
                 }
 
@@ -341,12 +1425,7 @@
                 const grid = document.getElementById("verifiedCoursesGrid");
                 wrap.classList.remove("hidden");
                 document.getElementById("verifiedCoursesTitle").textContent =
-                    `✅ ${r.data.user_name || "Account"} — ${courses.length} Purchased Course(s) (Click Start to Dual-Scan)`;
-
-                if (!courses.length) {
-                    grid.innerHTML = `<div class="col-span-full p-4 rounded-xl bg-amber-50 text-amber-900 text-xs font-bold">Token valid hai, par is account mein koi purchased course nahi mila.</div>`;
-                    return;
-                }
+                    `✅ ${r.data.user_name || "Account"} — ${courses.length} Purchased Course(s) (Click Start to Dual-Scan YT + TG)`;
 
                 grid.innerHTML = courses.map(c => `
                     <div class="p-3 rounded-2xl bg-sky-50/90 border-2 border-sky-200 flex items-center gap-3 justify-between">
@@ -358,7 +1437,7 @@
                             </div>
                         </div>
                         <button onclick="startCourseScan('${esc(c.id)}')" class="btn-p px-3 py-2 text-[11px] shrink-0">🚀 Start</button>
-                    </div>`).join("");
+                    </div>`).join("") || `<div class="col-span-full p-4 rounded-xl bg-amber-50 text-xs font-bold">Koi purchased course nahi mila.</div>`;
             } catch {
                 btn.disabled = false; btn.textContent = "🔍 Verify & Load Courses";
                 toast("Server error while verifying token.", "error");
@@ -368,10 +1447,7 @@
         async function startCourseScan(courseId = "") {
             const payload = {};
             if (courseId) payload.course_id = courseId;
-            if (cv.verifiedToken) {
-                payload.token = cv.verifiedToken;
-                payload.user_id = cv.verifiedUid;
-            }
+            if (cv.verifiedToken) { payload.token = cv.verifiedToken; payload.user_id = cv.verifiedUid; }
             const r = await api("/api/admin/scan/start", "POST", payload);
             toast(r.data.message || "Scan triggered", r.ok ? "success" : "error");
             if (r.data.scan) renderScanState(r.data.scan);
@@ -379,52 +1455,21 @@
 
         async function stopCourseScan() {
             const r = await api("/api/admin/scan/stop", "POST", {});
-            toast(r.data.message || "Process stopped!", "warning");
+            toast(r.data.message || "Stopped!", "warning");
             if (r.data.scan) renderScanState(r.data.scan);
         }
 
         async function clearAllQueue() {
-            if (!confirm("Kya aap saare Pending/Failed links clear karke naya scan shuru karna chahte hain? (Completed videos safe rahengi)")) return;
+            if (!confirm("Kya aap saare Pending/Failed items clear karna chahte hain? (Completed videos safe rahengi)")) return;
             const r = await api("/api/admin/queue/clear", "POST", {});
-            if (r.ok) {
-                toast(`🧹 Cleared ${r.data.deleted_count || 0} pending/failed item(s)!`, "success");
-                refreshAllCourseVault();
-            } else {
-                toast("Queue clear failed.", "error");
-            }
+            if (r.ok) { toast(`🧹 Cleared ${r.data.deleted_count || 0} item(s)!`, "success"); refreshAllCourseVault(); }
         }
 
-        async function recheckScopeApi(payload, label = "Folder") {
-            const r = await api("/api/admin/recheck", "POST", payload);
-            if (r.ok) {
-                toast(`🔄 ${label}: ${r.data.requeued_count || 0} class(es) re-queued for Termux!`, "success");
-                refreshAllCourseVault();
-            } else {
-                toast("Recheck failed.", "error");
-            }
+        async function retryAllFailedQueue(lecId = "", target = "both") {
+            const r = await api("/api/admin/queue/retry_failed", "POST", { lecture_id: lecId, target });
+            if (r.ok) { toast(`🔄 Reset ${r.data.reset_count || 0} item(s) to pending!`, "success"); refreshAllCourseVault(); }
         }
 
-        function recheckCurrentFolder() {
-            if (cv.view === "subjects") recheckScopeApi({ course_id: cv.courseId }, cv.courseName);
-            else if (cv.view === "topics") recheckScopeApi({ course_id: cv.courseId, subject_id: cv.subjectId }, cv.subjectName);
-            else if (cv.view === "lectures") recheckScopeApi({ course_id: cv.courseId, subject_id: cv.subjectId, topic_id: cv.topicId }, cv.topicName);
-        }
-
-        async function deleteVaultCourse(courseId, courseName) {
-            if (!confirm(`Kya aap "${courseName}" (#${courseId}) ko Course Vault se remove karna chahte hain?`)) return;
-            const r = await api("/api/admin/course/delete", "POST", { course_id: courseId });
-            if (r.ok) {
-                toast(`🗑 Removed Batch #${courseId}!`, "info");
-                refreshAllCourseVault();
-            } else {
-                toast("Delete failed.", "error");
-            }
-        }
-
-        async function retryAllFailedQueue(lecId = "") {
-            const r = await api("/api/admin/queue/retry_failed", "POST", { lecture_id: lecId });
-            if (r.ok) { toast(`🔄 Reset ${r.data.reset_count || 0} failed item(s) to pending!`, "success"); refreshAllCourseVault(); }
-        }
         async function flushCourseCache() {
             const r = await api("/api/admin/cache/flush", "POST", {});
             if (r.ok) { toast(`⚡ Cleared ${r.data.cleared || 0} cache keys!`, "success"); refreshAllCourseVault(); }
@@ -446,7 +1491,24 @@
 
         function renderSummary(s) {
             if (!s) return;
-            document.getElementById("cvTopMeta").textContent = `Updated: ${s.updated_at || "--"} • RAM Cache: ${(s.ram_cache && s.ram_cache.keys) || 0} keys`;
+            document.getElementById("cvTopMeta").textContent = `Updated: ${s.updated_at || "--"} • RAM Cache: ${(s.ram_cache && s.ram_cache.keys) || 0} keys • Bots: ${s.tg_bots_active || 0}/${s.tg_bots_total || 0}`;
+
+            // Separate YT & TG Progress Bars
+            const yt = s.yt_stats || { completed: s.yt_ready || 0, pending: 0, failed: 0, progress_pct: 0 };
+            const tg = s.tg_stats || { completed: s.tg_ready || 0, pending: 0, failed: 0, progress_pct: 0 };
+            document.getElementById("ytGlobalPct").textContent = `${yt.progress_pct || 0}%`;
+            document.getElementById("ytGlobalBar").style.width = `${yt.progress_pct || 0}%`;
+            document.getElementById("ytStatDone").textContent = yt.completed || 0;
+            document.getElementById("ytStatPend").textContent = yt.pending || 0;
+            document.getElementById("ytStatFail").textContent = yt.failed || 0;
+
+            document.getElementById("tgGlobalPct").textContent = `${tg.progress_pct || 0}%`;
+            document.getElementById("tgGlobalBar").style.width = `${tg.progress_pct || 0}%`;
+            document.getElementById("tgStatDone").textContent = tg.completed || 0;
+            document.getElementById("tgStatPend").textContent = tg.pending || 0;
+            document.getElementById("tgStatFail").textContent = tg.failed || 0;
+
+            // Worker Heartbeat + Device Guards
             const w = s.worker || {};
             const wp = document.getElementById("workerOnlinePill");
             wp.textContent = w.online ? `🟢 ${w.status || "ONLINE"}` : "⚪ OFFLINE";
@@ -454,6 +1516,10 @@
             document.getElementById("workerTaskText").textContent = w.current_task || "Termux mein rwa run karein.";
             document.getElementById("workerProgBar").style.width = `${w.online ? (w.progress || 15) : 0}%`;
             document.getElementById("workerTimeMeta").textContent = w.updated_at ? `Last ping: ${w.updated_at} (${w.seconds_ago || 0}s ago)` : "Never connected";
+            document.getElementById("workerHealthRow").innerHTML = `
+                <span class="px-2 py-0.5 rounded bg-sky-50 text-sky-800">💾 Free: ${w.free_gb ?? "--"} GB</span>
+                <span class="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800">🔋 Bat: ${w.battery_pct ?? "--"}%</span>
+                <span class="px-2 py-0.5 rounded bg-indigo-50 text-indigo-800">🤖 ${esc(w.active_bot || "No Bot")}</span>`;
 
             const sb = document.getElementById("cvStorageBadge");
             sb.textContent = s.storage_full ? `🚨 450 MB FULL!` : `✅ ${s.connected_dbs} Course DB(s) • ${s.max_mb_per_db || 450} MB Cap`;
@@ -463,15 +1529,18 @@
                 { l: "Batches", v: s.total_courses, c: "text-blue-600" },
                 { l: "Subjects", v: s.total_subjects, c: "text-indigo-600" },
                 { l: "Total Classes", v: s.total_lectures, c: "text-slate-800" },
-                { l: "YT Videos", v: s.yt_ready, c: "text-emerald-600" },
+                { l: "Completed", v: s.completed_lectures || 0, c: "text-emerald-600" },
+                { l: "Pending / Fail", v: `${s.pending_queue || 0} / ${s.failed_queue || 0}`, c: "text-rose-600" },
+                { l: "YT Videos", v: s.yt_ready, c: "text-red-600" },
+                { l: "TG Videos", v: s.tg_ready || 0, c: "text-sky-600" },
                 { l: "Drive PDFs", v: s.pdf_ready, c: "text-teal-600" },
-                { l: "Drive Images", v: (s.courses_thumbs_ready || 0) + (s.subjects_logos_ready || 0) + (s.thumbs_ready || 0), c: "text-purple-600" },
-                { l: "Pending / Fail", v: `${s.pending_queue || 0} / ${s.failed_queue || 0}`, c: "text-rose-600" }
+                { l: "TG PDFs", v: s.tg_pdf_ready || 0, c: "text-cyan-700" },
+                { l: "Drive Images", v: (s.courses_thumbs_ready || 0) + (s.subjects_logos_ready || 0) + (s.thumbs_ready || 0), c: "text-purple-600" }
             ];
             document.getElementById("cvSummaryKpis").innerHTML = kpis.map(k => `
                 <div class="p-3 rounded-2xl bg-sky-50/80 border border-sky-200 text-center">
                     <div class="text-[10px] font-black uppercase opacity-60">${k.l}</div>
-                    <div class="text-xl font-black mt-1 ${k.c}">${k.v}</div>
+                    <div class="text-lg font-black mt-1 ${k.c}">${k.v}</div>
                 </div>`).join("");
 
             document.getElementById("cvShardsGrid").innerHTML = (s.per_shard || []).map(db => {
@@ -480,7 +1549,7 @@
                     <div class="p-3 rounded-2xl bg-white border border-sky-200 space-y-1.5 text-xs">
                         <div class="flex justify-between font-black"><span>📦 ${esc(db.label)}</span><span>${db.size_mb || 0} / ${db.max_mb || 450} MB</span></div>
                         <div class="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div class="h-full ${db.is_full ? "bg-rose-600" : "bg-blue-600"}" style="width:${pct}%"></div></div>
-                        <div class="text-[11px] font-bold opacity-70">🎬 ${db.yt_ready || 0} YT Ready / ${db.lectures || 0} Classes</div>
+                        <div class="text-[11px] font-bold opacity-70">▶️ ${db.yt_ready || 0} YT • ✈️ ${db.tg_ready || 0} TG / ${db.lectures || 0} Classes</div>
                     </div>`;
             }).join("");
         }
@@ -494,11 +1563,30 @@
             document.getElementById("cvScanPhase").textContent = sc.current_phase || "Ready";
             document.getElementById("cvScanPct").textContent = `${sc.progress_percent || 0}%`;
             document.getElementById("cvScanBar").style.width = `${sc.progress_percent || 0}%`;
-            document.getElementById("cvScanStatsRow").textContent = `Batches: ${sc.courses_done || 0}/${sc.courses_total || 0} • New: ${sc.new_lectures_queued || 0} • Missing Re-queued: ${sc.requeued_missing || 0} • Skipped: ${sc.existing_skipped || 0}`;
+            document.getElementById("cvScanStatsRow").textContent =
+                `Batches: ${sc.courses_done || 0}/${sc.courses_total || 0} • New: ${sc.new_lectures_queued || 0} • Re-queued: ${(sc.requeued_missing || 0) + (sc.db_audit_requeued || 0)} • Skipped: ${sc.existing_skipped || 0}`;
             const lg = document.getElementById("cvScanLogs");
             if (lg && Array.isArray(sc.logs) && sc.logs.length) {
                 lg.innerHTML = sc.logs.map(x => `<div>${esc(x)}</div>`).join("");
             }
+        }
+
+        // =========================================================
+        // COURSES EXPLORER (PER-COURSE YT & TG STATS + CHANNEL EDIT)
+        // =========================================================
+        async function recheckScopeApi(payload, label = "Folder") {
+            const target = document.getElementById("cvRecheckTarget")?.value || "both";
+            const r = await api("/api/admin/recheck", "POST", { ...payload, target });
+            if (r.ok) {
+                toast(`🔄 ${label} (${target.toUpperCase()}): ${r.data.requeued_count || 0} class(es) re-queued!`, "success");
+                refreshAllCourseVault();
+            } else toast("Recheck failed.", "error");
+        }
+
+        function recheckCurrentFolder() {
+            if (cv.view === "subjects") recheckScopeApi({ course_id: cv.courseId }, cv.courseName);
+            else if (cv.view === "topics") recheckScopeApi({ course_id: cv.courseId, subject_id: cv.subjectId }, cv.subjectName);
+            else if (cv.view === "lectures") recheckScopeApi({ course_id: cv.courseId, subject_id: cv.subjectId, topic_id: cv.topicId }, cv.topicName);
         }
 
         async function loadMirrorCourses() {
@@ -506,45 +1594,100 @@
             document.getElementById("cvMirrorBackBtn").classList.add("hidden");
             document.getElementById("cvFolderRecheckBtn").classList.add("hidden");
             document.getElementById("cvMirrorCrumb").textContent = "Course Vault Root";
-            document.getElementById("cvMirrorHeading").textContent = "🎓 All Archived Batches (Website Mirror)";
+            document.getElementById("cvMirrorHeading").textContent = "🎓 All Archived Batches (Per-Course YT & TG Stats)";
             const res = await fetch(`${cv.apiBase}/api/cv/courses`).then(r => r.json());
             const list = res.courses || [];
+            cv.coursesCache = list;
+            populateRestoreCourseDropdown();
+
             const grid = document.getElementById("cvMirrorGrid");
             if (!list.length) {
-                grid.innerHTML = `<div class="col-span-full py-10 text-center text-xs font-bold opacity-65">Abhi koi batch archived nahi hai. Upar Token verify karke koi course start karein.</div>`;
+                grid.innerHTML = `<div class="col-span-full py-10 text-center text-xs font-bold opacity-65">Abhi koi batch archived nahi hai. Token &amp; Scan folder se scan shuru karein.</div>`;
                 return;
             }
 
             grid.innerHTML = list.map(c => {
-                const isVaultMode = c.playback_mode !== "hls_live";
                 const safeName = esc(c.course_name).replace(/'/g, "");
+                const yt = c.yt_stats || { completed: c.yt_ready_lectures || 0, pending: 0, failed: 0, progress_pct: 0 };
+                const tg = c.tg_stats || { completed: 0, pending: 0, failed: 0, progress_pct: 0 };
+                const modeLbl = c.upload_mode === "only_tg" ? "✈️ Only TG" : (c.upload_mode === "only_yt" ? "▶️ Only YT" : "⚡ Both");
                 return `
                     <div class="cv-item glass rounded-2xl overflow-hidden flex flex-col justify-between">
                         <div onclick="openMirrorCourse('${esc(c.course_id)}', '${safeName}')" class="cursor-pointer">
                             <img src="${esc(c.exam_logo || 'https://placehold.co/600x300/0284c7/ffffff?text=Batch')}" onerror="this.src='https://placehold.co/600x300/0284c7/ffffff?text=Batch'" class="w-full h-36 object-cover">
-                            <div class="p-3.5 space-y-1">
+                            <div class="p-3.5 space-y-2">
                                 <div class="flex justify-between gap-1 flex-wrap">
-                                    <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[10px] font-black">BATCH #${esc(c.course_id)}</span>
-                                    <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black">🎬 ${c.yt_ready_lectures || 0}/${c.total_lectures || 0} YT</span>
+                                    <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[10px] font-black">#${esc(c.course_id)} • ${c.total_lectures || 0} Q</span>
+                                    <div class="flex gap-1">
+                                        ${c.priority === "high" ? `<span class="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black">🔥 HIGH</span>` : ""}
+                                        <span class="px-2 py-0.5 rounded-full bg-sky-100 text-sky-900 text-[10px] font-black">${modeLbl}</span>
+                                    </div>
                                 </div>
-                                <h4 class="font-black text-sm mt-1">${esc(c.course_name)}</h4>
+                                <h4 class="font-black text-sm leading-snug">${esc(c.course_name)}</h4>
+                                <div class="text-[10px] font-mono font-bold ${c.tg_channel_id ? "text-emerald-700" : "text-amber-700"}">
+                                    ✈️ TG Channel: ${esc(c.tg_channel_id || "Not Set (Click ✈️ Edit)")}
+                                </div>
+
+                                <!-- Per-Course YT Stats -->
+                                <div class="space-y-1 text-[10px] font-black">
+                                    <div class="flex justify-between text-red-700">
+                                        <span>▶️ YT: ✅${yt.completed} ⏳${yt.pending} ❌${yt.failed}</span>
+                                        <span>${yt.progress_pct}%</span>
+                                    </div>
+                                    <div class="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div class="h-full bg-red-500" style="width:${yt.progress_pct}%"></div></div>
+                                </div>
+
+                                <!-- Per-Course TG Stats -->
+                                <div class="space-y-1 text-[10px] font-black">
+                                    <div class="flex justify-between text-sky-700">
+                                        <span>✈️ TG: ✅${tg.completed} ⏳${tg.pending} ❌${tg.failed}</span>
+                                        <span>${tg.progress_pct}%</span>
+                                    </div>
+                                    <div class="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div class="h-full bg-sky-500" style="width:${tg.progress_pct}%"></div></div>
+                                </div>
                             </div>
                         </div>
                         <div class="px-3.5 pb-3.5 flex items-center gap-1.5 flex-wrap">
-                            <button onclick="toggleBatchMode('${esc(c.course_id)}', '${isVaultMode ? "hls_live" : "vault_first"}')" class="flex-1 py-2 rounded-xl text-[11px] font-black border-0 cursor-pointer ${isVaultMode ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"}">
-                                ${isVaultMode ? "☁️ YT + Drive" : "📡 Live HLS"}
-                            </button>
-                            <button onclick="recheckScopeApi({course_id:'${esc(c.course_id)}'}, '${safeName}')" class="px-2.5 py-2 rounded-xl bg-teal-600 text-white text-[11px] font-black border-0 cursor-pointer" title="Recheck Missing Items">🔄</button>
-                            <button onclick="deleteVaultCourse('${esc(c.course_id)}', '${safeName}')" class="px-2.5 py-2 rounded-xl bg-rose-600 text-white text-[11px] font-black border-0 cursor-pointer" title="Remove Course">🗑</button>
+                            <button onclick='openCourseSettingsModal(${JSON.stringify({id:c.course_id,name:c.course_name,ch:c.tg_channel_id||"",link:c.tg_channel_link||"",um:c.upload_mode||"both",pr:c.priority||"normal",pm:c.playback_mode||"vault_first",idx:c.tg_index_msg_id||""})})' class="flex-1 py-2 rounded-xl bg-sky-600 text-white text-[11px] font-black border-0 cursor-pointer">✈️ TG &amp; Mode</button>
+                            <button onclick="recheckScopeApi({course_id:'${esc(c.course_id)}'}, '${safeName}')" class="px-2.5 py-2 rounded-xl bg-teal-600 text-white text-[11px] font-black border-0 cursor-pointer" title="Recheck Course">🔄</button>
+                            <button onclick="deleteVaultCourse('${esc(c.course_id)}', '${safeName}')" class="px-2.5 py-2 rounded-xl bg-rose-600 text-white text-[11px] font-black border-0 cursor-pointer" title="Delete Course">🗑</button>
                             <button onclick="openMirrorCourse('${esc(c.course_id)}', '${safeName}')" class="btn-p px-3 py-2 text-xs">Open →</button>
                         </div>
                     </div>`;
             }).join("");
         }
 
-        async function toggleBatchMode(cid, mode) {
-            const r = await api("/api/admin/course/mode", "POST", { course_id: cid, mode });
-            if (r.ok) { toast(`✅ Batch #${cid} switched to ${mode}!`, "success"); loadMirrorCourses(); }
+        function openCourseSettingsModal(c) {
+            document.getElementById("csModalTitle").textContent = `✈️ ${c.name}`;
+            document.getElementById("csCourseId").value = c.id;
+            document.getElementById("csTgChId").value = c.ch || "";
+            document.getElementById("csTgChLink").value = c.link || "";
+            document.getElementById("csUploadMode").value = c.um || "both";
+            document.getElementById("csPriority").value = c.pr || "normal";
+            document.getElementById("csPlaybackMode").value = c.pm || "vault_first";
+            document.getElementById("csIndexMsgId").value = c.idx || "";
+            document.getElementById("courseSettingsModal").classList.remove("hidden");
+        }
+        function closeCourseSettingsModal() { document.getElementById("courseSettingsModal").classList.add("hidden"); }
+
+        async function saveCourseSettings() {
+            const r = await api("/api/admin/course/settings", "POST", {
+                course_id: document.getElementById("csCourseId").value,
+                tg_channel_id: document.getElementById("csTgChId").value.trim(),
+                tg_channel_link: document.getElementById("csTgChLink").value.trim(),
+                upload_mode: document.getElementById("csUploadMode").value,
+                priority: document.getElementById("csPriority").value,
+                playback_mode: document.getElementById("csPlaybackMode").value,
+                tg_index_msg_id: document.getElementById("csIndexMsgId").value.trim()
+            });
+            if (r.ok) { closeCourseSettingsModal(); toast("✅ Course TG Channel & Settings Saved!", "success"); loadMirrorCourses(); }
+            else toast("Save failed", "error");
+        }
+
+        async function deleteVaultCourse(courseId, courseName) {
+            if (!confirm(`Kya aap "${courseName}" (#${courseId}) ko Course Vault se remove karna chahte hain?`)) return;
+            const r = await api("/api/admin/course/delete", "POST", { course_id: courseId });
+            if (r.ok) { toast(`🗑 Removed Batch #${courseId}!`, "info"); refreshAllCourseVault(); }
         }
 
         async function openMirrorCourse(cid, cname) {
@@ -558,18 +1701,43 @@
             document.getElementById("cvMirrorGrid").innerHTML = list.map(s => {
                 const sn = esc(s.subject_name).replace(/'/g, "");
                 return `
-                <div class="cv-item glass p-4 rounded-2xl flex items-center justify-between gap-3">
+                <div class="cv-item glass p-4 rounded-2xl flex items-center justify-between gap-2">
                     <div onclick="openMirrorSubject('${esc(s.subject_id)}', '${sn}')" class="flex items-center gap-3 min-w-0 flex-1 cursor-pointer">
                         <img src="${esc(s.subject_logo || 'https://placehold.co/64x64/0284c7/ffffff?text=SUB')}" onerror="this.src='https://placehold.co/64x64/0284c7/ffffff?text=SUB'" class="w-14 h-14 rounded-xl object-cover shrink-0">
                         <div class="min-w-0">
                             <span class="px-2 py-0.5 rounded bg-sky-100 text-sky-900 text-[10px] font-black">SUB #${esc(s.subject_id)}</span>
                             <h4 class="font-black text-sm mt-1 truncate">${esc(s.subject_name)}</h4>
-                            <div class="text-[11px] font-extrabold text-blue-600">Open Topics →</div>
+                            <div class="text-[10px] font-bold opacity-70 truncate">
+                                ${s.tg_channel_id ? `✈️ ${esc(s.tg_channel_id)}` : "Course Main CH"} ${s.tg_topic_id ? `• Topic #${esc(s.tg_topic_id)}` : ""}
+                            </div>
                         </div>
                     </div>
-                    <button onclick="recheckScopeApi({course_id:'${esc(cid)}', subject_id:'${esc(s.subject_id)}'}, '${sn}')" class="px-2.5 py-2 rounded-xl bg-teal-600 text-white text-xs font-black border-0 cursor-pointer shrink-0" title="Recheck Subject">🔄</button>
+                    <div class="flex flex-col gap-1.5 shrink-0">
+                        <button onclick='openSubjectSettingsModal(${JSON.stringify({cid:cid,sid:s.subject_id,name:s.subject_name,ch:s.tg_channel_id||"",tid:s.tg_topic_id||""})})' class="px-2.5 py-1.5 rounded-xl bg-sky-600 text-white text-[11px] font-black border-0 cursor-pointer" title="Subject TG / Topic">✈️</button>
+                        <button onclick="recheckScopeApi({course_id:'${esc(cid)}', subject_id:'${esc(s.subject_id)}'}, '${sn}')" class="px-2.5 py-1.5 rounded-xl bg-teal-600 text-white text-[11px] font-black border-0 cursor-pointer" title="Recheck Subject">🔄</button>
+                    </div>
                 </div>`;
             }).join("") || `<div class="col-span-full py-8 text-center text-xs font-bold opacity-65">No subjects saved yet.</div>`;
+        }
+
+        function openSubjectSettingsModal(s) {
+            document.getElementById("ssModalTitle").textContent = `📚 ${s.name}`;
+            document.getElementById("ssCourseId").value = s.cid;
+            document.getElementById("ssSubjectId").value = s.sid;
+            document.getElementById("ssTgChId").value = s.ch || "";
+            document.getElementById("ssTgTopicId").value = s.tid || "";
+            document.getElementById("subjectSettingsModal").classList.remove("hidden");
+        }
+        function closeSubjectSettingsModal() { document.getElementById("subjectSettingsModal").classList.add("hidden"); }
+
+        async function saveSubjectSettings() {
+            const r = await api("/api/admin/subject/settings", "POST", {
+                course_id: document.getElementById("ssCourseId").value,
+                subject_id: document.getElementById("ssSubjectId").value,
+                tg_channel_id: document.getElementById("ssTgChId").value.trim(),
+                tg_topic_id: document.getElementById("ssTgTopicId").value.trim()
+            });
+            if (r.ok) { closeSubjectSettingsModal(); toast("✅ Subject Channel / Forum Topic Saved!", "success"); openMirrorCourse(cv.courseId, cv.courseName); }
         }
 
         async function openMirrorSubject(sid, sname) {
@@ -587,7 +1755,7 @@
                         <span class="text-[10px] font-black text-blue-600">TOPIC #${esc(t.topic_id)}</span>
                         <h4 class="font-black text-sm truncate mt-0.5">📁 ${esc(t.topic_name)}</h4>
                     </div>
-                    <button onclick="recheckScopeApi({course_id:'${esc(cv.courseId)}', subject_id:'${esc(sid)}', topic_id:'${esc(t.topic_id)}'}, '${tn}')" class="px-2.5 py-1.5 rounded-xl bg-teal-600 text-white text-xs font-black border-0 cursor-pointer shrink-0" title="Recheck Folder">🔄</button>
+                    <button onclick="recheckScopeApi({course_id:'${esc(cv.courseId)}', subject_id:'${esc(sid)}', topic_id:'${esc(t.topic_id)}'}, '${tn}')" class="px-2.5 py-1.5 rounded-xl bg-teal-600 text-white text-xs font-black border-0 cursor-pointer shrink-0">🔄</button>
                     <button onclick="openMirrorTopic('${esc(t.topic_id)}', '${tn}')" class="btn-p px-3 py-1.5 text-xs shrink-0">Classes →</button>
                 </div>`;
             }).join("") || `<div class="col-span-full py-8 text-center text-xs font-bold opacity-65">No topics saved yet.</div>`;
@@ -608,19 +1776,22 @@
                             ${l.thumbnail ? `<img src="${esc(l.thumbnail)}" class="w-full h-32 object-cover rounded-xl">` : ""}
                             <div class="flex justify-between items-center gap-1 flex-wrap">
                                 <span class="px-2 py-0.5 rounded-full ${stCls} text-[10px] font-black uppercase">${esc(l.status)}</span>
-                                <span class="text-[10px] font-bold opacity-65">#${esc(l.lecture_id)}</span>
+                                <span class="text-[10px] font-black text-indigo-700">#${esc(l.seq_code || "000")} • ID ${esc(l.lecture_id)}</span>
                             </div>
                             <h4 class="font-black text-sm leading-snug">${esc(l.title)}</h4>
                             <div class="flex gap-1.5 flex-wrap text-[10px] font-black">
-                                <span class="px-2 py-0.5 rounded ${l.yt_video_id ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-500"}">🎬 ${l.yt_video_id ? "YT: " + esc(l.yt_video_id) : "No YT"}</span>
-                                <span class="px-2 py-0.5 rounded ${l.drive_pdf1_id ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}">📄 ${l.drive_pdf1_id ? "PDF1 Ready" : "No PDF1"}</span>
-                                <span class="px-2 py-0.5 rounded ${l.drive_pdf2_id ? "bg-teal-100 text-teal-800" : "bg-slate-100 text-slate-500"}">📄 ${l.drive_pdf2_id ? "PDF2 Ready" : "No PDF2"}</span>
+                                <span class="px-2 py-0.5 rounded ${l.yt_video_id ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-500"}">▶️ ${l.yt_video_id ? "YT: " + esc(l.yt_video_id) : "No YT"}</span>
+                                <span class="px-2 py-0.5 rounded ${l.tg_video_msg_id ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-500"}">✈️ ${l.tg_video_msg_id ? "TG #" + esc(l.tg_video_msg_id) : "No TG"}</span>
+                                <span class="px-2 py-0.5 rounded ${l.drive_pdf1_id ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}">📄 ${l.drive_pdf1_id ? "PDF1" : "No P1"}</span>
+                                <span class="px-2 py-0.5 rounded ${l.drive_pdf2_id ? "bg-teal-100 text-teal-800" : "bg-slate-100 text-slate-500"}">📄 ${l.drive_pdf2_id ? "PDF2" : "No P2"}</span>
                             </div>
-                            ${l.error_message ? `<div class="text-[10px] font-bold text-rose-600">${esc(l.error_message)}</div>` : ""}
+                            ${l.yt_error ? `<div class="text-[10px] font-bold text-red-600">YT: ${esc(l.yt_error)}</div>` : ""}
+                            ${l.tg_error ? `<div class="text-[10px] font-bold text-sky-700">TG: ${esc(l.tg_error)}</div>` : ""}
+                            ${(!l.yt_error && !l.tg_error && l.error_message) ? `<div class="text-[10px] font-bold text-rose-600">${esc(l.error_message)}</div>` : ""}
                         </div>
                         <div class="flex gap-2 pt-2 border-t border-sky-200/50">
-                            <button onclick='openOverrideModal(${JSON.stringify({id:l.lecture_id,title:l.title,yt:l.yt_video_id||"",p1:l.drive_pdf1_id||"",p2:l.drive_pdf2_id||"",th:l.drive_thumb_id||""})})' class="btn-p flex-1 py-1.5 text-xs">✏️ Edit</button>
-                            <button onclick="recheckScopeApi({lecture_id:'${esc(l.lecture_id)}', force_all:true}, 'Class #${esc(l.lecture_id)}')" class="px-3 py-1.5 rounded-xl bg-teal-600 text-white font-black text-xs border-0 cursor-pointer" title="Recheck & Re-queue">🔄 Recheck</button>
+                            <button onclick='openOverrideModal(${JSON.stringify({id:l.lecture_id,title:l.title,yt:l.yt_video_id||"",p1:l.drive_pdf1_id||"",p2:l.drive_pdf2_id||"",th:l.drive_thumb_id||"",tgv:l.tg_video_msg_id||"",tgp1:l.tg_pdf1_msg_id||"",tgp2:l.tg_pdf2_msg_id||""})})' class="btn-p flex-1 py-1.5 text-xs">✏️ Edit</button>
+                            <button onclick="recheckScopeApi({lecture_id:'${esc(l.lecture_id)}', force_all:true}, 'Class #${esc(l.lecture_id)}')" class="px-3 py-1.5 rounded-xl bg-teal-600 text-white font-black text-xs border-0 cursor-pointer">🔄 Recheck</button>
                         </div>
                     </div>`;
             }).join("") || `<div class="col-span-full py-8 text-center text-xs font-bold opacity-65">No lectures in this topic yet.</div>`;
@@ -637,6 +1808,7 @@
                 el.style.display = el.innerText.toLowerCase().includes(q) ? "" : "none";
             });
         }
+
         function openOverrideModal(obj) {
             document.getElementById("ovTitle").textContent = obj.title || `Lecture #${obj.id}`;
             document.getElementById("ovLecId").value = obj.id;
@@ -644,6 +1816,9 @@
             document.getElementById("ovPdf1").value = obj.p1 || "";
             document.getElementById("ovPdf2").value = obj.p2 || "";
             document.getElementById("ovThumb").value = obj.th || "";
+            document.getElementById("ovTgVid").value = obj.tgv || "";
+            document.getElementById("ovTgP1").value = obj.tgp1 || "";
+            document.getElementById("ovTgP2").value = obj.tgp2 || "";
             document.getElementById("overrideModal").classList.remove("hidden");
         }
         function closeOverrideModal() { document.getElementById("overrideModal").classList.add("hidden"); }
@@ -654,7 +1829,10 @@
                 yt_video_id: extractYtId(document.getElementById("ovYtId").value),
                 drive_pdf1_id: extractDriveId(document.getElementById("ovPdf1").value),
                 drive_pdf2_id: extractDriveId(document.getElementById("ovPdf2").value),
-                drive_thumb_id: extractDriveId(document.getElementById("ovThumb").value)
+                drive_thumb_id: extractDriveId(document.getElementById("ovThumb").value),
+                tg_video_msg_id: document.getElementById("ovTgVid").value.trim(),
+                tg_pdf1_msg_id: document.getElementById("ovTgP1").value.trim(),
+                tg_pdf2_msg_id: document.getElementById("ovTgP2").value.trim()
             });
             if (r.ok) { closeOverrideModal(); toast("✅ Lecture Links Updated!", "success"); openMirrorTopic(cv.topicId, cv.topicName); }
             else toast("Update failed.", "error");
