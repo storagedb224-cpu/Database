@@ -1,9 +1,8 @@
 // =========================================================
-// RWA ULTIMATE ASMANI SKY PRO OTT PLAYER ENGINE (player.js)
-// Features: Anti-Leak Custom YouTube Unlisted Player (Zero Logo/Copy),
-// Multi-Worker HLS Failover, Lock-Screen Media Session, Speed Auto-Memory,
-// Auto-Resume, Double-Tap Seek, Hold 2x, Brightness/Volume Swipe,
-// A-B Loop, Board Screenshot, Audio-Only, Sleep Timer, Lock & Split-Screen
+// RWA ULTIMATE ASMANI SKY PRO OTT PLAYER ENGINE (player_2.js)
+// Upgraded: Error 153 Permanent Fix, True HD 1080p/720p Switcher,
+// /live/ + /shorts/ + /embed/ Support, 100% Transparent Auto-Hide Shield,
+// Stream-Only (Zero TG/YT Redirect), All Existing Pro OTT Features Intact
 // =========================================================
 
 const HLS_STREAM_PROXIES = [
@@ -27,13 +26,16 @@ let hls = null;
 let cachedToken = "";
 let resumeSeekTime = 0;
 
-// Anti-Leak YouTube Engine State
+// Anti-Leak YouTube HD Engine State
 let _isYtMode = false;
 let _ytPlayer = null;
 let _ytApiReady = false;
 let _ytPendingId = null;
 let _ytTickInterval = null;
+let _ytQualityRetryTimer = null;
+let _savedYtQuality = localStorage.getItem("rwa_yt_quality") || "hd1080";
 
+let _controlsAutoHideTimer = null;
 let _isScreenLocked = false;
 let _isAudioOnly = false;
 let _brightnessLevel = 1.0;
@@ -95,7 +97,43 @@ function mediaSetVolume(vol01) {
 }
 
 // =========================================================
-// ANTI-LEAK YOUTUBE IFRAME API MOUNTING (ZERO LOGO / ZERO COPY)
+// 100% TRANSPARENT CONTROLS AUTO-HIDE ENGINE
+// =========================================================
+function showPlayerControls(autoHide = true) {
+    if (_isScreenLocked || !playerControlsBar) return;
+    playerControlsBar.classList.remove("hidden-controls");
+    if (_controlsAutoHideTimer) clearTimeout(_controlsAutoHideTimer);
+    if (autoHide) scheduleControlsAutoHide();
+}
+
+function hidePlayerControlsNow() {
+    if (!playerControlsBar) return;
+    if (document.getElementById("settingsMenu")?.classList.contains("show")) return;
+    playerControlsBar.classList.add("hidden-controls");
+}
+
+function scheduleControlsAutoHide(delayMs = 3000) {
+    if (_controlsAutoHideTimer) clearTimeout(_controlsAutoHideTimer);
+    _controlsAutoHideTimer = setTimeout(() => {
+        if (!isPaused() && !document.getElementById("settingsMenu")?.classList.contains("show")) {
+            hidePlayerControlsNow();
+        }
+    }, delayMs);
+}
+
+// =========================================================
+// YOUTUBE ID EXTRACTOR (WATCH, YOUTU.BE, LIVE, SHORTS, EMBED)
+// =========================================================
+function extractCleanYtId(raw) {
+    const s = String(raw || "").trim();
+    const m = s.match(/(?:youtu\.be\/|v=|embed\/|shorts\/|live\/)([A-Za-z0-9_-]{11})/);
+    if (m) return m[1];
+    if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+    return "";
+}
+
+// =========================================================
+// ANTI-LEAK TRUE HD YOUTUBE ENGINE (ERROR 153 PERMANENT FIX)
 // =========================================================
 function ensureYtAntiLeakDom() {
     if (!hlsScreen || document.getElementById("ytAntiLeakWrap")) return;
@@ -103,13 +141,42 @@ function ensureYtAntiLeakDom() {
     wrap.id = "ytAntiLeakWrap";
     wrap.className = "hidden";
     wrap.style.cssText = "position:absolute;inset:0;width:100%;height:100%;background:#000;overflow:hidden;z-index:2;";
-    // Oversize iframe slightly vertically so top title bar & bottom YouTube branding are clipped cleanly
+    // Oversize slightly so YT top title & bottom logo are clipped; shield is 100% transparent
     wrap.innerHTML = `
         <div id="ytApiMount" style="position:absolute;top:-54px;left:0;width:100%;height:calc(100% + 108px);pointer-events:none;"></div>
-        <div id="ytAntiLeakShield" oncontextmenu="return false;" style="position:absolute;inset:0;z-index:4;background:transparent;"></div>
+        <div id="ytAntiLeakShield" oncontextmenu="return false;" style="position:absolute;inset:0;z-index:4;background:transparent !important;opacity:1;"></div>
+        <div id="ytStreamErrorBox" class="hidden" style="position:absolute;inset:0;z-index:8;background:rgba(15,23,42,0.94);color:#fff;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px;gap:8px;">
+            <div style="font-size:30px;">⚠️</div>
+            <div id="ytErrTitle" style="font-size:15px;font-weight:900;">Stream Unavailable</div>
+            <div id="ytErrDesc" style="font-size:12px;opacity:0.85;max-width:340px;line-height:1.5;"></div>
+            <button onclick="retryActiveStream()" style="margin-top:6px;padding:8px 18px;border-radius:12px;background:#0284c7;color:#fff;font-weight:800;font-size:12px;border:0;cursor:pointer;">🔄 Retry Stream</button>
+        </div>
     `;
     hlsScreen.insertBefore(wrap, hlsScreen.firstChild);
 }
+
+function showYtErrorOverlay(title, desc) {
+    const box = document.getElementById("ytStreamErrorBox");
+    if (!box) return;
+    const t = document.getElementById("ytErrTitle");
+    const d = document.getElementById("ytErrDesc");
+    if (t) t.textContent = title;
+    if (d) d.textContent = desc;
+    box.classList.remove("hidden");
+    box.style.display = "flex";
+}
+
+function hideYtErrorOverlay() {
+    const box = document.getElementById("ytStreamErrorBox");
+    if (!box) return;
+    box.classList.add("hidden");
+    box.style.display = "none";
+}
+
+window.retryActiveStream = function() {
+    hideYtErrorOverlay();
+    start(false);
+};
 
 function loadYouTubeIframeApi() {
     if (window.YT && window.YT.Player) { _ytApiReady = true; return; }
@@ -130,8 +197,37 @@ window.onYouTubeIframeAPIReady = function() {
     }
 };
 
+function applyYtHdQuality(nudgeSeek = false) {
+    if (!_isYtMode || !_ytPlayer) return;
+    const q = _savedYtQuality || "hd1080";
+    try {
+        if (typeof _ytPlayer.setPlaybackQualityRange === "function") {
+            _ytPlayer.setPlaybackQualityRange(q === "default" ? "hd720" : q);
+        }
+        if (typeof _ytPlayer.setPlaybackQuality === "function") {
+            _ytPlayer.setPlaybackQuality(q);
+        }
+        if (nudgeSeek && typeof _ytPlayer.getCurrentTime === "function" && typeof _ytPlayer.seekTo === "function") {
+            const cur = _ytPlayer.getCurrentTime() || 0;
+            if (cur > 1) _ytPlayer.seekTo(cur + 0.01, true);
+        }
+    } catch {}
+}
+
+function destroyYtPlayerInstance() {
+    if (_ytTickInterval) { clearInterval(_ytTickInterval); _ytTickInterval = null; }
+    if (_ytQualityRetryTimer) { clearTimeout(_ytQualityRetryTimer); _ytQualityRetryTimer = null; }
+    if (_ytPlayer) {
+        try { _ytPlayer.destroy(); } catch {}
+        _ytPlayer = null;
+    }
+    const mount = document.getElementById("ytApiMount");
+    if (mount) mount.innerHTML = "";
+}
+
 function mountAntiLeakYouTube(videoId) {
     ensureYtAntiLeakDom();
+    hideYtErrorOverlay();
     _isYtMode = true;
     document.getElementById("ytScreen")?.classList.add("hidden");
     hlsScreen?.classList.remove("hidden");
@@ -145,47 +241,67 @@ function mountAntiLeakYouTube(videoId) {
         return;
     }
 
-    if (_ytPlayer && typeof _ytPlayer.loadVideoById === "function") {
-        _ytPlayer.loadVideoById(videoId);
-        startYtProgressTicker();
-        return;
+    // Always pre-build iframe WITH referrerpolicy BEFORE loading src -> Fixes Error 153 permanently!
+    destroyYtPlayerInstance();
+    const mount = document.getElementById("ytApiMount");
+    if (!mount) return;
+
+    const params = new URLSearchParams({
+        enablejsapi: "1",
+        autoplay: "1",
+        controls: "0",
+        disablekb: "1",
+        fs: "0",
+        iv_load_policy: "3",
+        modestbranding: "1",
+        playsinline: "1",
+        rel: "0",
+        vq: (_savedYtQuality && _savedYtQuality !== "default") ? _savedYtQuality : "hd1080"
+    });
+    if (window.location.origin && window.location.origin.startsWith("http")) {
+        params.set("origin", window.location.origin);
     }
 
-    _ytPlayer = new YT.Player("ytApiMount", {
-        videoId,
-        playerVars: {
-            autoplay: 1,
-            controls: 0,
-            disablekb: 1,
-            fs: 0,
-            iv_load_policy: 3,
-            modestbranding: 1,
-            playsinline: 1,
-            rel: 0,
-            origin: window.location.origin
-        },
+    const ifr = document.createElement("iframe");
+    ifr.id = "ytAntiLeakFrame";
+    ifr.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
+    ifr.setAttribute("allow", "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share");
+    ifr.setAttribute("allowfullscreen", "");
+    ifr.style.cssText = "width:100%;height:100%;border:0;display:block;";
+    ifr.src = `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
+    mount.appendChild(ifr);
+
+    _ytPlayer = new YT.Player("ytAntiLeakFrame", {
         events: {
             onReady: () => {
                 showLoader(false);
                 populateQualitySettings([]);
+                applyYtHdQuality(false);
                 applyAutoResumeIfAvailable();
                 applySavedPlaybackRate();
                 setupLockScreenMediaSession();
                 if (typeof state !== "undefined") renderSeekbarNoteMarkers(state.activeKey);
-                _ytPlayer.playVideo();
+                try { _ytPlayer.playVideo(); } catch {}
                 startYtProgressTicker();
+                scheduleControlsAutoHide(3000);
+                // Re-assert HD quality after initial adaptive buffer stabilizes
+                _ytQualityRetryTimer = setTimeout(() => applyYtHdQuality(false), 2500);
             },
             onStateChange: (ev) => {
                 const st = ev.data;
                 const toggleBtn = document.getElementById("toggle");
                 if (st === 1) {
                     showLoader(false);
+                    hideYtErrorOverlay();
                     if (toggleBtn) toggleBtn.textContent = "⏸";
                     _lastWatchTickTs = Date.now();
+                    applyYtHdQuality(false);
+                    scheduleControlsAutoHide(3000);
                     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
                 } else if (st === 2) {
                     if (toggleBtn) toggleBtn.textContent = "▶";
                     flushWatchSessionMinutes();
+                    showPlayerControls(false);
                     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
                     saveCurrentProgressNow();
                 } else if (st === 3) {
@@ -193,12 +309,30 @@ function mountAntiLeakYouTube(videoId) {
                 } else if (st === 0) {
                     flushWatchSessionMinutes();
                     saveCurrentProgressNow(true);
+                    showPlayerControls(false);
                     triggerAutoPlayNextCountdown();
                 }
             },
-            onError: () => {
+            onError: (ev) => {
                 showLoader(false);
-                if (typeof proToast === "function") proToast("⚠️ YouTube stream error — fallback try karein.", "warning");
+                const code = Number(ev && ev.data);
+                if (code === 101 || code === 150) {
+                    showYtErrorOverlay(
+                        `Embedding Disabled (Code ${code})`,
+                        "Is channel ke owner ne external websites par video embed block kiya hua hai. Is class ko apne Unlisted channel par upload karke ID update karein."
+                    );
+                } else if (code === 153) {
+                    showYtErrorOverlay(
+                        "Player Configuration Error (Code 153)",
+                        "Referrer header block ho raha hai. Portal ko HTTPS URL par kholein aur browser cache refresh karein."
+                    );
+                } else {
+                    showYtErrorOverlay(
+                        `Stream Unavailable (Code ${code || "ERR"})`,
+                        "Video abhi load nahi ho paya. Kripya internet check karke Retry dabayein."
+                    );
+                }
+                if (typeof proToast === "function") proToast(`⚠️ Stream error (Code ${code || "ERR"})`, "warning");
             }
         }
     });
@@ -311,8 +445,9 @@ function stopPlayer() {
     flushWatchSessionMinutes();
     cancelAutoPlayNext();
     resetAbLoop();
-    if (_ytTickInterval) { clearInterval(_ytTickInterval); _ytTickInterval = null; }
-    if (_ytPlayer && typeof _ytPlayer.stopVideo === "function") { try { _ytPlayer.stopVideo(); } catch {} }
+    if (_controlsAutoHideTimer) { clearTimeout(_controlsAutoHideTimer); _controlsAutoHideTimer = null; }
+    destroyYtPlayerInstance();
+    hideYtErrorOverlay();
     document.getElementById("ytAntiLeakWrap")?.classList.add("hidden");
     _isYtMode = false;
 
@@ -320,6 +455,7 @@ function stopPlayer() {
     if (v) { v.style.visibility = "visible"; v.pause(); v.removeAttribute("src"); v.load(); }
     const ytFrame = document.getElementById("ytFrame"); if (ytFrame) ytFrame.src = "";
     showLoader(false);
+    showPlayerControls(false);
 }
 
 window.closePlayerBox = function() {
@@ -353,13 +489,15 @@ function start(isFailoverRetry = false) {
     showLoader(true);
 
     const cleanRaw = unwrapOriginalUrl(raw);
-    const isYT = (!cleanRaw.startsWith("http") && cleanRaw.length >= 10 && cleanRaw.length <= 15) || cleanRaw.includes("youtube.com") || cleanRaw.includes("youtu.be");
+    const ytId = extractCleanYtId(cleanRaw);
+    const isYT = Boolean(ytId) && (
+        !cleanRaw.startsWith("http") ||
+        cleanRaw.includes("youtube.com") ||
+        cleanRaw.includes("youtu.be")
+    );
 
     if (isYT) {
-        let ytId = cleanRaw;
-        if (cleanRaw.includes("v=")) ytId = cleanRaw.split("v=")[1].split("&")[0];
-        else if (cleanRaw.includes("youtu.be/")) ytId = cleanRaw.split("youtu.be/")[1].split("?")[0];
-        mountAntiLeakYouTube(ytId.trim());
+        mountAntiLeakYouTube(ytId);
         return;
     }
 
@@ -377,6 +515,7 @@ function start(isFailoverRetry = false) {
             showLoader(false); applyAutoResumeIfAvailable(); applySavedPlaybackRate(); setupLockScreenMediaSession();
             if (typeof state !== "undefined") renderSeekbarNoteMarkers(state.activeKey);
             v.play().catch(() => {});
+            scheduleControlsAutoHide(3000);
         };
         return;
     }
@@ -387,6 +526,15 @@ function start(isFailoverRetry = false) {
         hls.on(Hls.Events.MEDIA_ATTACHED, () => hls.loadSource(src));
         hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
             showLoader(false);
+            // Force highest HD HLS level initially
+            if (data.levels && data.levels.length > 1) {
+                let bestIdx = 0, bestH = 0;
+                data.levels.forEach((lv, i) => {
+                    const h = lv.height || 0;
+                    if (h >= bestH) { bestH = h; bestIdx = i; }
+                });
+                hls.currentLevel = bestIdx;
+            }
             populateQualitySettings(data.levels || []);
             v.onloadedmetadata = () => {
                 applyAutoResumeIfAvailable(); applySavedPlaybackRate(); setupLockScreenMediaSession();
@@ -394,6 +542,7 @@ function start(isFailoverRetry = false) {
             };
             applySavedPlaybackRate(); setupLockScreenMediaSession();
             v.play().catch(() => {});
+            scheduleControlsAutoHide(3000);
         });
         hls.on(Hls.Events.ERROR, (_, d) => {
             if (d.fatal) {
@@ -418,6 +567,7 @@ function start(isFailoverRetry = false) {
             showLoader(false); applyAutoResumeIfAvailable(); applySavedPlaybackRate(); setupLockScreenMediaSession();
             if (typeof state !== "undefined") renderSeekbarNoteMarkers(state.activeKey);
             v.play().catch(() => {});
+            scheduleControlsAutoHide(3000);
         };
     }
 }
@@ -441,7 +591,7 @@ window.cycleAbLoop = function() {
 };
 
 window.captureBoardScreenshot = function() {
-    if (_isYtMode) return proToast("YouTube mode mein phone ka screenshot use karein.", "info");
+    if (_isYtMode) return proToast("YouTube HD mode mein phone ka screenshot use karein.", "info");
     if (!v || !v.videoWidth) return proToast("Video load hone ke baad screenshot lein.", "warning");
     try {
         const canvas = document.createElement("canvas");
@@ -545,7 +695,7 @@ window.cancelAutoPlayNext = function(hide = true) {
     }
 
     hlsScreen.addEventListener("touchstart", (e) => {
-        if (_isScreenLocked || e.target.closest("button") || e.target.closest("input") || e.target.closest("#settingsMenu")) return;
+        if (_isScreenLocked || e.target.closest("button") || e.target.closest("input") || e.target.closest("#settingsMenu") || e.target.closest("#ytStreamErrorBox")) return;
         const t = e.touches[0]; touchStartX = t.clientX; touchStartY = t.clientY;
         touchStartVol = v ? v.volume : 1; touchStartBright = _brightnessLevel; swipeMode = null;
         holdTimer = setTimeout(startHold2x, 480);
@@ -574,13 +724,13 @@ window.cancelAutoPlayNext = function(hide = true) {
 
     hlsScreen.addEventListener("touchend", () => { clearTimeout(holdTimer); endHold2x(); });
     hlsScreen.addEventListener("mousedown", (e) => {
-        if (_isScreenLocked || e.target.closest("button") || e.target.closest("input") || e.target.closest("#settingsMenu")) return;
+        if (_isScreenLocked || e.target.closest("button") || e.target.closest("input") || e.target.closest("#settingsMenu") || e.target.closest("#ytStreamErrorBox")) return;
         holdTimer = setTimeout(startHold2x, 500);
     });
     window.addEventListener("mouseup", () => { clearTimeout(holdTimer); endHold2x(); });
 
     hlsScreen.addEventListener("click", (e) => {
-        if (_isScreenLocked || e.target.closest("button") || e.target.closest("input") || e.target.closest("#settingsMenu")) return;
+        if (_isScreenLocked || e.target.closest("button") || e.target.closest("input") || e.target.closest("#settingsMenu") || e.target.closest("#ytStreamErrorBox")) return;
         if (swipeMode) { swipeMode = null; return; }
         const now = Date.now(), rect = hlsScreen.getBoundingClientRect(), relX = (e.clientX - rect.left) / rect.width;
         if (now - lastTapTime < 280) {
@@ -592,7 +742,11 @@ window.cancelAutoPlayNext = function(hide = true) {
         }
         lastTapTime = now;
         singleTapTimer = setTimeout(() => {
-            playerControlsBar?.classList.toggle("hidden-controls");
+            if (playerControlsBar?.classList.contains("hidden-controls")) {
+                showPlayerControls(true);
+            } else {
+                hidePlayerControlsNow();
+            }
             document.getElementById("settingsMenu")?.classList.remove("show");
         }, 280);
     });
@@ -608,9 +762,23 @@ document.addEventListener("keydown", (e) => {
     else if (e.key.toLowerCase() === "f") { document.getElementById("fs")?.click(); }
 });
 
+// TRUE HD QUALITY MENU FOR BOTH YOUTUBE AND HLS
 function populateQualitySettings(hlsLevels) {
     const qList = document.getElementById("qualityList"); if (!qList) return;
-    if (_isYtMode) { qList.innerHTML = `<div class="q-option active" onclick="toggleSettingsMenu()">Auto HD (YouTube)</div>`; return; }
+    if (_isYtMode) {
+        const ytOpts = [
+            { q: "hd1080", lbl: "1080p HD" },
+            { q: "hd720", lbl: "720p HD" },
+            { q: "large", lbl: "480p" },
+            { q: "medium", lbl: "360p" },
+            { q: "default", lbl: "Auto" }
+        ];
+        qList.innerHTML = ytOpts.map(o =>
+            `<div class="q-option ${_savedYtQuality === o.q ? "active" : ""}" onclick="changeYtQuality('${o.q}', this)">${o.lbl}</div>`
+        ).join("");
+        return;
+    }
+
     const activeInfo = (typeof state !== "undefined" && state.activeKey && state.mediaMap) ? state.mediaMap[state.activeKey] : null;
     const serverQualsObj = (activeInfo && activeInfo.qualities) ? activeInfo.qualities : {};
     const serverKeys = Object.keys(serverQualsObj);
@@ -623,25 +791,68 @@ function populateQualitySettings(hlsLevels) {
             html += `<div class="q-option ${isAct ? "active" : ""}" onclick="switchServerQuality('${qKey.replace(/'/g, "")}', this)">${qKey}</div>`;
         });
     } else if (hlsLevels && hlsLevels.length > 1) {
-        html += `<div class="q-option active" onclick="changeHlsLevel(-1, this)">Auto</div>`;
+        html += `<div class="q-option" onclick="changeHlsLevel(-1, this)">Auto</div>`;
         const seen = new Set();
-        hlsLevels.forEach((lvl, idx) => { const lbl = lvl.height ? `${lvl.height}p` : `${idx + 1}p`; if (!seen.has(lbl)) { seen.add(lbl); html += `<div class="q-option" onclick="changeHlsLevel(${idx}, this)">${lbl}</div>`; } });
-    } else html = `<div class="q-option active" onclick="toggleSettingsMenu()">720p HD</div>`;
+        hlsLevels.forEach((lvl, idx) => {
+            const lbl = lvl.height ? `${lvl.height}p` : `${idx + 1}p`;
+            const isAct = hls && hls.currentLevel === idx;
+            if (!seen.has(lbl)) {
+                seen.add(lbl);
+                html += `<div class="q-option ${isAct ? "active" : ""}" onclick="changeHlsLevel(${idx}, this)">${lbl}</div>`;
+            }
+        });
+    } else {
+        html = `<div class="q-option active" onclick="toggleSettingsMenu()">720p HD</div>`;
+    }
     qList.innerHTML = html;
 }
 
-window.changeHlsLevel = function(idx, el) { if (hls) hls.currentLevel = idx; document.querySelectorAll("#qualityList .q-option").forEach(o => o.classList.remove("active")); el?.classList.add("active"); toggleSettingsMenu(); };
-window.switchServerQuality = function(qKey, el) { resumeSeekTime = getCurTime(); document.querySelectorAll("#qualityList .q-option").forEach(o => o.classList.remove("active")); el?.classList.add("active"); toggleSettingsMenu(); if (typeof changeLectureQuality === "function") changeLectureQuality(qKey, resumeSeekTime); };
+window.changeYtQuality = function(q, el) {
+    _savedYtQuality = q || "hd1080";
+    localStorage.setItem("rwa_yt_quality", _savedYtQuality);
+    document.querySelectorAll("#qualityList .q-option").forEach(o => o.classList.remove("active"));
+    el?.classList.add("active");
+    applyYtHdQuality(true);
+    toggleSettingsMenu();
+    const mapLbl = { hd1080: "1080p HD", hd720: "720p HD", large: "480p", medium: "360p", default: "Auto" };
+    showGestureHud(`🎬 Quality: ${mapLbl[_savedYtQuality] || "HD"}`);
+    scheduleControlsAutoHide(2500);
+};
+
+window.changeHlsLevel = function(idx, el) {
+    if (hls) hls.currentLevel = idx;
+    document.querySelectorAll("#qualityList .q-option").forEach(o => o.classList.remove("active"));
+    el?.classList.add("active");
+    toggleSettingsMenu();
+    scheduleControlsAutoHide(2500);
+};
+window.switchServerQuality = function(qKey, el) {
+    resumeSeekTime = getCurTime();
+    document.querySelectorAll("#qualityList .q-option").forEach(o => o.classList.remove("active"));
+    el?.classList.add("active");
+    toggleSettingsMenu();
+    if (typeof changeLectureQuality === "function") changeLectureQuality(qKey, resumeSeekTime);
+};
 window.changeSpd = function(rate, el) {
     mediaSetRate(rate);
     localStorage.setItem("rwa_saved_playback_rate", String(rate));
-    if (window.PRO_STORE && PRO_STORE.preferences) { PRO_STORE.preferences.playbackRate = rate; if (typeof saveProStoreLocal === "function") saveProStoreLocal(false); }
+    if (window.PRO_STORE && PRO_STORE.preferences) {
+        PRO_STORE.preferences.playbackRate = rate;
+        if (typeof saveProStoreLocal === "function") saveProStoreLocal(false);
+    }
     document.querySelectorAll(".spd-option").forEach(o => o.classList.remove("active"));
     el?.classList.add("active");
     toggleSettingsMenu();
     showGestureHud(`⚡ Speed ${rate}x (Saved)`);
+    scheduleControlsAutoHide(2500);
 };
-window.toggleSettingsMenu = function() { document.getElementById("settingsMenu")?.classList.toggle("show"); };
+window.toggleSettingsMenu = function() {
+    const menu = document.getElementById("settingsMenu");
+    if (!menu) return;
+    const isNowOpen = menu.classList.toggle("show");
+    if (isNowOpen) showPlayerControls(false);
+    else scheduleControlsAutoHide(2500);
+};
 
 async function downloadMerged() {
     if (_isYtMode) return proToast("YouTube Cloud Mode mein video streaming ultra-fast hai (Download sirf HLS mode mein available hai).", "info");
@@ -706,30 +917,62 @@ function handleUnifiedTimeTick() {
 }
 
 const toggleBtn = document.getElementById("toggle");
-if (toggleBtn) toggleBtn.onclick = () => isPaused() ? mediaPlay() : mediaPause();
+if (toggleBtn) toggleBtn.onclick = () => {
+    isPaused() ? mediaPlay() : mediaPause();
+    scheduleControlsAutoHide(3000);
+};
 
-v.onplay = () => { if (toggleBtn) toggleBtn.textContent = "⏸"; showLoader(false); _lastWatchTickTs = Date.now(); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing"; };
-v.onpause = () => { if (toggleBtn) toggleBtn.textContent = "▶"; flushWatchSessionMinutes(); saveCurrentProgressNow(false); if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused"; };
-v.onended = () => { flushWatchSessionMinutes(); saveCurrentProgressNow(true); triggerAutoPlayNextCountdown(); };
-v.onwaiting = () => showLoader(true);
-v.onplaying = () => showLoader(false);
-v.oncanplay = () => showLoader(false);
-v.ontimeupdate = () => { if (!_isYtMode) handleUnifiedTimeTick(); };
+if (v) {
+    v.onplay = () => {
+        if (toggleBtn) toggleBtn.textContent = "⏸";
+        showLoader(false);
+        _lastWatchTickTs = Date.now();
+        scheduleControlsAutoHide(3000);
+        if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
+    };
+    v.onpause = () => {
+        if (toggleBtn) toggleBtn.textContent = "▶";
+        flushWatchSessionMinutes();
+        saveCurrentProgressNow(false);
+        showPlayerControls(false);
+        if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
+    };
+    v.onended = () => {
+        flushWatchSessionMinutes();
+        saveCurrentProgressNow(true);
+        showPlayerControls(false);
+        triggerAutoPlayNextCountdown();
+    };
+    v.onwaiting = () => showLoader(true);
+    v.onplaying = () => showLoader(false);
+    v.oncanplay = () => showLoader(false);
+    v.ontimeupdate = () => { if (!_isYtMode) handleUnifiedTimeTick(); };
+}
 
-document.getElementById("back")?.addEventListener("click", () => mediaSeek(getCurTime() - 10));
-document.getElementById("next")?.addEventListener("click", () => mediaSeek(getCurTime() + 10));
+document.getElementById("back")?.addEventListener("click", () => { mediaSeek(getCurTime() - 10); scheduleControlsAutoHide(3000); });
+document.getElementById("next")?.addEventListener("click", () => { mediaSeek(getCurTime() + 10); scheduleControlsAutoHide(3000); });
 const muteBtn = document.getElementById("mute");
-if (muteBtn) muteBtn.onclick = () => { const m = !mediaIsMuted(); mediaSetMuted(m); muteBtn.textContent = m ? "🔇" : "🔊"; };
+if (muteBtn) muteBtn.onclick = () => { const m = !mediaIsMuted(); mediaSetMuted(m); muteBtn.textContent = m ? "🔇" : "🔊"; scheduleControlsAutoHide(3000); };
 document.getElementById("download")?.addEventListener("click", downloadMerged);
 document.getElementById("pip")?.addEventListener("click", async () => {
     if (_isYtMode) return;
     try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); else if (v.requestPictureInPicture) await v.requestPictureInPicture(); } catch {}
 });
 const fsBtn = document.getElementById("fs"), headerBar = document.getElementById("playerHeaderBar");
-if (fsBtn && hlsScreen) fsBtn.onclick = async () => { try { if (!document.fullscreenElement) await hlsScreen.requestFullscreen(); else await document.exitFullscreen(); } catch {} };
+if (fsBtn && hlsScreen) fsBtn.onclick = async () => {
+    try {
+        if (!document.fullscreenElement) {
+            await hlsScreen.requestFullscreen();
+            screen.orientation?.lock?.("landscape").catch(() => {});
+        } else {
+            await document.exitFullscreen();
+        }
+    } catch {}
+};
 document.addEventListener("fullscreenchange", () => {
     if (document.fullscreenElement) { headerBar?.classList.add("hidden"); if (fsBtn) fsBtn.textContent = "🗗"; }
     else { headerBar?.classList.remove("hidden"); if (fsBtn) fsBtn.textContent = "⛶"; }
+    scheduleControlsAutoHide(2500);
 });
 const seekEl = document.getElementById("seek");
-if (seekEl) seekEl.oninput = (e) => { const d = getDuration(); if (d > 0) mediaSeek((e.target.value / 1000) * d); };
+if (seekEl) seekEl.oninput = (e) => { const d = getDuration(); if (d > 0) mediaSeek((e.target.value / 1000) * d); scheduleControlsAutoHide(3000); };
