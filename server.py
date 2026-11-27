@@ -16,11 +16,15 @@ app = Flask(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
+def _is_valid_admin_req():
+    key = (request.headers.get("X-Course-Admin-Key") or request.args.get("key") or "").strip()
+    return bool(key) and key == config.ADMIN_KEY
+
+
 def _get_tg_bot_token_and_chats():
     settings = course_vault_db.get_all_settings()
     tg_core = settings.get("telegram_core", {})
 
-    # Chat IDs: Admin Panel first, fallback to config.ADMIN_IDS
     chats = []
     raw_chats = str(tg_core.get("admin_chat_ids") or "").replace("\n", ",")
     for part in raw_chats.split(","):
@@ -32,7 +36,6 @@ def _get_tg_bot_token_and_chats():
         if s and s not in chats:
             chats.append(s)
 
-    # Bot Token: Active Admin Panel TG Bots first, fallback to config.BOT_TOKEN
     bot_token = ""
     bots = course_vault_db.get_tg_bots(include_inactive=False)
     for b in bots:
@@ -103,17 +106,22 @@ def send_json_backup_to_telegram(reason="Scheduled Backup"):
 
 def send_daily_report_to_telegram(title="Daily Course Vault Report"):
     s = course_vault_db.get_direct_summary()
+    an = course_vault_db.get_channel_analytics()
     yt = s.get("yt_stats", {})
     tg = s.get("tg_stats", {})
     w = s.get("worker", {})
+    tots = an.get("totals", {})
+    qr = an.get("quota_reset", {})
+
     msg = (
         f"📊 <b>{title}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🎓 Batches      : <b>{s.get('total_courses', 0)}</b>\n"
         f"🎬 Total Classes: <b>{s.get('total_lectures', 0)}</b>\n\n"
-        f"▶️ <b>YouTube Backup ({yt.get('progress_pct', 0)}%)</b>\n"
-        f"   ✅ Done: {yt.get('completed', 0)} | ⏳ Pend: {yt.get('pending', 0)} | ❌ Fail: {yt.get('failed', 0)}\n\n"
-        f"✈️ <b>Telegram Backup ({tg.get('progress_pct', 0)}%)</b>\n"
+        f"▶️ <b>YouTube ({yt.get('progress_pct', 0)}%)</b> — {tots.get('yt_gb', 0)} GB\n"
+        f"   ✅ Done: {yt.get('completed', 0)} | ⏳ Pend: {yt.get('pending', 0)} | ❌ Fail: {yt.get('failed', 0)}\n"
+        f"   ⏳ API Quota Renew: <b>{qr.get('reset_ist', '--')}</b> ({qr.get('remaining_text', '--')})\n\n"
+        f"✈️ <b>Telegram ({tg.get('progress_pct', 0)}%)</b> — {tots.get('tg_gb', 0)} GB\n"
         f"   ✅ Done: {tg.get('completed', 0)} | ⏳ Pend: {tg.get('pending', 0)} | ❌ Fail: {tg.get('failed', 0)}\n\n"
         f"📄 Drive PDFs   : <b>{s.get('pdf_ready', 0)}</b> | TG PDFs: <b>{s.get('tg_pdf_ready', 0)}</b>\n"
         f"📱 Worker       : <b>{'🟢 ONLINE' if w.get('online') else '⚪ OFFLINE'}</b>\n"
@@ -155,21 +163,20 @@ def apply_cors(resp):
 def require_admin(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        key = (request.headers.get("X-Course-Admin-Key") or request.args.get("key") or "").strip()
-        if key != config.ADMIN_KEY:
+        if not _is_valid_admin_req():
             return jsonify({"status": "error", "message": "Invalid Course Admin Key"}), 401
         return fn(*args, **kwargs)
     return wrapper
 
 
 # =========================================================
-# HEALTH & PORTAL PUBLIC ENDPOINTS (OLD FEATURES 100% INTACT)
+# HEALTH & PORTAL PUBLIC ENDPOINTS (STREAM ONLY — ZERO TG LEAK)
 # =========================================================
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({
         "status": "online",
-        "service": "RWA Course Vault Backend (YT + TG Double Backup)",
+        "service": "RWA Course Vault Backend (YT + TG Pro)",
         "course_dbs": len(course_vault_db.dbs),
         "scanner_running": course_scanner.get_status().get("running", False),
         "termux_worker_online": course_vault_db.get_worker_heartbeat().get("online", False)
@@ -178,12 +185,34 @@ def health():
 
 @app.route("/api/cv/courses", methods=["GET"])
 def api_cv_courses():
-    return jsonify({"status": "success", "courses": course_vault_db.get_all_courses()})
+    is_admin = _is_valid_admin_req()
+    courses = course_vault_db.get_all_courses()
+    if not is_admin:
+        safe_courses = []
+        for c in courses:
+            d = dict(c)
+            d.pop("tg_channel_id", None)
+            d.pop("tg_channel_link", None)
+            d.pop("tg_stats", None)
+            safe_courses.append(d)
+        courses = safe_courses
+    return jsonify({"status": "success", "courses": courses})
 
 
 @app.route("/api/cv/subjects/<course_id>", methods=["GET"])
 def api_cv_subjects(course_id):
-    return jsonify({"status": "success", "subjects": course_vault_db.get_course_subjects(course_id)})
+    is_admin = _is_valid_admin_req()
+    subs = course_vault_db.get_course_subjects(course_id)
+    if not is_admin:
+        safe_subs = []
+        for s in subs:
+            d = dict(s)
+            d.pop("tg_channel_id", None)
+            d.pop("tg_topic_id", None)
+            d.pop("tg_topic_index_msg_id", None)
+            safe_subs.append(d)
+        subs = safe_subs
+    return jsonify({"status": "success", "subjects": subs})
 
 
 @app.route("/api/cv/topics/<course_id>/<subject_id>", methods=["GET"])
@@ -193,24 +222,24 @@ def api_cv_topics(course_id, subject_id):
 
 @app.route("/api/cv/lectures/<course_id>/<subject_id>/<topic_id>", methods=["GET"])
 def api_cv_lectures(course_id, subject_id, topic_id):
-    return jsonify({"status": "success", "lectures": course_vault_db.get_topic_lectures(course_id, subject_id, topic_id)})
+    is_admin = _is_valid_admin_req()
+    return jsonify({
+        "status": "success",
+        "lectures": course_vault_db.get_topic_lectures(course_id, subject_id, topic_id, include_admin_tg=is_admin)
+    })
 
 
 @app.route("/api/cv/lecture/<lecture_id>", methods=["GET"])
 def api_cv_single_lecture(lecture_id):
-    doc = course_vault_db.get_single_lecture(lecture_id)
+    is_admin = _is_valid_admin_req()
+    doc = course_vault_db.get_single_lecture(lecture_id, include_admin_tg=is_admin)
     if not doc:
         return jsonify({"status": "not_found"}), 404
     return jsonify({"status": "success", "lecture": doc})
 
 
-@app.route("/api/cv/course_index/<course_id>", methods=["GET"])
-def api_cv_course_index(course_id):
-    return jsonify({"status": "success", "lectures": course_vault_db.get_course_index_lectures(course_id)})
-
-
 # =========================================================
-# TERMUX WORKER ENDPOINTS (LIGHTWEIGHT JSON ONLY — 0 MB MEDIA)
+# TERMUX WORKER API ENDPOINTS (OPTIONAL SYNC)
 # =========================================================
 @app.route("/api/worker/config", methods=["GET"])
 @require_admin
@@ -254,6 +283,8 @@ def api_worker_report_lecture():
         lecture_id=data.get("lecture_id", ""),
         ok=bool(data.get("ok", False)),
         yt_video_id=data.get("yt_video_id", ""),
+        yt_channel_key=data.get("yt_channel_key", ""),
+        yt_channel_title=data.get("yt_channel_title", ""),
         drive_pdf1_id=data.get("drive_pdf1_id", ""),
         drive_pdf2_id=data.get("drive_pdf2_id", ""),
         drive_thumb_id=data.get("drive_thumb_id", ""),
@@ -268,9 +299,27 @@ def api_worker_report_lecture():
         tg_master_video_msg_id=data.get("tg_master_video_msg_id", ""),
         tg_master_pdf1_msg_id=data.get("tg_master_pdf1_msg_id", ""),
         tg_master_pdf2_msg_id=data.get("tg_master_pdf2_msg_id", ""),
+        video_size_bytes=int(data.get("video_size_bytes") or 0),
+        pdf_size_bytes=int(data.get("pdf_size_bytes") or 0),
         yt_error=data.get("yt_error"),
         tg_error=data.get("tg_error"),
         skipped=bool(data.get("skipped", False))
+    )
+    return jsonify({"status": "success" if ok else "error"}), 200
+
+
+@app.route("/api/worker/yt_channel_event", methods=["POST"])
+def api_worker_yt_channel_event():
+    data = request.get_json(silent=True) or {}
+    ok = course_vault_db.record_yt_channel_event(
+        client_key=data.get("client_key", ""),
+        channel_id=data.get("channel_id", ""),
+        channel_title=data.get("channel_title", ""),
+        status=data.get("status", "READY"),
+        uploaded_bytes=int(data.get("uploaded_bytes") or 0),
+        error_msg=data.get("error_msg", ""),
+        hit_upload_limit=bool(data.get("hit_upload_limit", False)),
+        hit_api_quota=bool(data.get("hit_api_quota", False))
     )
     return jsonify({"status": "success" if ok else "error"}), 200
 
@@ -287,35 +336,6 @@ def api_worker_bot_status():
     return jsonify({"status": "success" if ok else "error"}), 200
 
 
-@app.route("/api/worker/course_index_msg", methods=["POST"])
-def api_worker_course_index_msg():
-    data = request.get_json(silent=True) or {}
-    ok = course_vault_db.update_course_settings(
-        course_id=data.get("course_id", ""),
-        tg_index_msg_id=data.get("tg_index_msg_id", "")
-    )
-    return jsonify({"status": "success" if ok else "error"}), 200
-
-
-@app.route("/api/worker/next_restore_job", methods=["GET"])
-def api_worker_next_restore_job():
-    job = course_vault_db.claim_next_restore_job()
-    return jsonify({"status": "success", "job": job}), 200
-
-
-@app.route("/api/worker/report_restore_job", methods=["POST"])
-def api_worker_report_restore_job():
-    data = request.get_json(silent=True) or {}
-    ok = course_vault_db.update_restore_job(
-        job_id=data.get("job_id", ""),
-        status=data.get("status", "completed"),
-        done_count=data.get("done_count", 0),
-        total_count=data.get("total_count", 0),
-        error=data.get("error", "")
-    )
-    return jsonify({"status": "success" if ok else "error"}), 200
-
-
 @app.route("/api/worker/notify", methods=["POST"])
 def api_worker_notify():
     data = request.get_json(silent=True) or {}
@@ -326,7 +346,7 @@ def api_worker_notify():
 
 
 # =========================================================
-# ADMIN AUTH, SUMMARY & EXISTING CONTROLS
+# ADMIN AUTH, SUMMARY, ANALYTICS & SCAN CONTROLS
 # =========================================================
 @app.route("/api/admin/auth", methods=["POST"])
 def api_admin_auth():
@@ -342,7 +362,33 @@ def api_admin_summary():
     return jsonify({
         "status": "success",
         "summary": course_vault_db.get_direct_summary(),
-        "scan": course_scanner.get_status()
+        "scan": course_scanner.get_status(),
+        "analytics": course_vault_db.get_channel_analytics()
+    })
+
+
+@app.route("/api/admin/analytics", methods=["GET"])
+@require_admin
+def api_admin_analytics():
+    return jsonify({
+        "status": "success",
+        "analytics": course_vault_db.get_channel_analytics()
+    })
+
+
+@app.route("/api/admin/yt_channel/meta", methods=["POST"])
+@require_admin
+def api_admin_yt_channel_meta():
+    data = request.get_json(silent=True) or {}
+    ok = course_vault_db.update_yt_channel_meta(
+        client_key=data.get("client_key", ""),
+        daily_limit_est=data.get("daily_limit_est"),
+        daily_quota_cap=data.get("daily_quota_cap"),
+        channel_title=data.get("channel_title")
+    )
+    return jsonify({
+        "status": "success" if ok else "error",
+        "analytics": course_vault_db.get_channel_analytics()
     })
 
 
@@ -409,11 +455,17 @@ def api_admin_queue_clear():
 def api_admin_scan_start():
     data = request.get_json(silent=True) or {}
     course_id = str(data.get("course_id") or "").strip()
+    scan_target = str(data.get("scan_target") or "both").strip()
     raw_token = clean_jwt_token(data.get("token", ""))
     user_id = str(data.get("user_id") or "").strip()
     override = {"token": raw_token, "user_id": user_id or extract_uid_from_jwt(raw_token)} if raw_token else None
 
-    ok, msg = course_scanner.start_scan(mode="manual", target_course_id=course_id, override_token=override)
+    ok, msg = course_scanner.start_scan(
+        mode="manual",
+        target_course_id=course_id,
+        override_token=override,
+        scan_target=scan_target
+    )
     return jsonify({"status": "success" if ok else "error", "message": msg, "scan": course_scanner.get_status()})
 
 
@@ -493,7 +545,7 @@ def api_admin_flush():
 
 
 # =========================================================
-# NEW A-TO-Z ADMIN PANEL CONTROL ENDPOINTS
+# A-TO-Z ADMIN PANEL CONTROLS
 # =========================================================
 @app.route("/api/admin/settings", methods=["GET", "POST"])
 @require_admin
@@ -526,6 +578,8 @@ def api_admin_worker_control():
     data = request.get_json(silent=True) or {}
     ok = course_vault_db.set_worker_control(
         state=data.get("state"),
+        yt_worker_enabled=data.get("yt_worker_enabled"),
+        tg_worker_enabled=data.get("tg_worker_enabled"),
         skip_lecture_id=data.get("skip_lecture_id"),
         download_threads=data.get("download_threads")
     )
@@ -572,7 +626,6 @@ def api_admin_course_settings():
         tg_channel_link=data.get("tg_channel_link"),
         upload_mode=data.get("upload_mode"),
         priority=data.get("priority"),
-        tg_index_msg_id=data.get("tg_index_msg_id"),
         playback_mode=data.get("playback_mode")
     )
     return jsonify({"status": "success" if ok else "error"})
@@ -586,7 +639,8 @@ def api_admin_subject_settings():
         course_id=data.get("course_id", ""),
         subject_id=data.get("subject_id", ""),
         tg_channel_id=data.get("tg_channel_id"),
-        tg_topic_id=data.get("tg_topic_id")
+        tg_topic_id=data.get("tg_topic_id"),
+        tg_topic_index_msg_id=data.get("tg_topic_index_msg_id")
     )
     return jsonify({"status": "success" if ok else "error"})
 
@@ -645,7 +699,7 @@ def api_admin_report_send_now():
 
 
 # =========================================================
-# BACKGROUND SCHEDULERS (NIGHTLY SCAN + DAILY REPORT + AUTO JSON BACKUP)
+# BACKGROUND SCHEDULERS (NIGHTLY SCAN + DAILY REPORT + JSON BACKUP)
 # =========================================================
 def start_background_schedulers():
     last_scan_date = None
@@ -657,13 +711,11 @@ def start_background_schedulers():
                 now = datetime.now(IST)
                 today = now.strftime("%Y-%m-%d")
 
-                # 1. Nightly Course Scanner
                 if now.hour == config.NIGHTLY_SCAN_HOUR_IST and last_scan_date != today:
                     last_scan_date = today
-                    ok, msg = course_scanner.start_scan(mode="nightly")
+                    ok, msg = course_scanner.start_scan(mode="nightly", scan_target="both")
                     print(f"🕚 [Nightly Course Scanner] {today}: ok={ok} | {msg}")
 
-                # 2. Daily Telegram Report & Auto JSON Backup
                 settings = course_vault_db.get_all_settings()
                 rr = settings.get("retry_and_reports", {})
 
@@ -695,5 +747,5 @@ def start_background_schedulers():
 
 if __name__ == "__main__":
     start_background_schedulers()
-    print(f"🚀 RWA Course Vault Backend (YT + TG Double Backup) running on port {config.PORT} (DBs={len(course_vault_db.dbs)})")
+    print(f"🚀 RWA Course Vault Backend (YT + TG Pro) running on port {config.PORT} (DBs={len(course_vault_db.dbs)})")
     serve(app, host="0.0.0.0", port=config.PORT, threads=config.WAITRESS_THREADS, connection_limit=500, channel_timeout=60)
