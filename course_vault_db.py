@@ -1,3 +1,4 @@
+import copy
 import threading
 import time
 from datetime import datetime, timezone, timedelta
@@ -5,6 +6,63 @@ from pymongo import MongoClient, DESCENDING
 import config
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+DEFAULT_ADMIN_SETTINGS = {
+    "tg_api_id": "",
+    "tg_api_hash": "",
+    "tg_bots": [],
+    "master_backup_channel": "",
+    "auto_forward_master": True,
+    "admin_alert_chat_id": "",
+    "auto_pin_index": True,
+    "seq_indexing": True,
+    "brand_tag": "RWB | 𝕮𝖍𝖆𝖚𝖉𝖍𝖆𝖗𝖄",
+    "brand_link": "",
+    "video_caption_tpl": (
+        "🎬 {course}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🔢 Index   : #{index}\n"
+        "📚 Subject : {subject}\n"
+        "📂 Topic   : {topic}\n"
+        "📝 Class   : {title}\n"
+        "🆔 Class ID: #{id}\n"
+        "📅 Date    : {date}\n"
+        "🏷️ Backup  : {brand}"
+    ),
+    "pdf_caption_tpl": (
+        "📄 [{pdf_label}] {title}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🔢 Index   : #{index}\n"
+        "🎓 Batch   : {course}\n"
+        "📚 Subject : {subject}\n"
+        "📂 Topic   : {topic}\n"
+        "🆔 Class ID: #{id}\n"
+        "🏷️ Backup  : {brand}"
+    ),
+    "inline_buttons": [],
+    "pdf_watermark_enabled": False,
+    "pdf_watermark_text": "RWA Vault | RWB",
+    "worker_paused": False,
+    "skip_lecture_id": "",
+    "download_threads": 12,
+    "max_tg_size_mb": 1950,
+    "large_file_mode": "split",
+    "guard_enabled": True,
+    "min_storage_gb": 2.0,
+    "min_battery_pct": 15,
+    "max_retries": 3,
+    "retry_cooldown_min": 10,
+    "auto_json_backup": True,
+    "backup_every_n": 50,
+    "backup_interval_hours": 24,
+    "daily_report_enabled": True,
+    "daily_report_hour_ist": 22,
+    "portal_tg_fallback": True,
+    "backup_now_ts": 0,
+    "report_now_ts": 0
+}
+
+PRIORITY_ORDER = {"high": 1, "normal": 2, "low": 3}
 
 
 def now_ist_str():
@@ -22,9 +80,7 @@ def _clean_doc(doc):
 
 def drive_image_url(file_id):
     fid = str(file_id or "").strip()
-    if not fid:
-        return ""
-    return f"https://lh3.googleusercontent.com/d/{fid}=w1000"
+    return f"https://lh3.googleusercontent.com/d/{fid}=w1000" if fid else ""
 
 
 class RamTTLCache:
@@ -125,6 +181,8 @@ class CourseVaultDB:
             db.lectures.create_index("lecture_id", unique=True)
             db.lectures.create_index([("course_id", 1), ("subject_id", 1), ("topic_id", 1)])
             db.lectures.create_index("status")
+            db.lectures.create_index("yt_status")
+            db.lectures.create_index("tg_status")
             db.scanner_tokens.create_index("user_id", unique=True)
         except Exception:
             pass
@@ -158,10 +216,50 @@ class CourseVaultDB:
                 continue
         return None
 
+    # ---------------- GLOBAL ADMIN SETTINGS ----------------
+    def get_admin_settings(self):
+        cached = ram_cache.get("cv_settings:global")
+        if cached is not None:
+            return copy.deepcopy(cached)
+        merged = copy.deepcopy(DEFAULT_ADMIN_SETTINGS)
+        primary = self.get_primary_db()
+        if primary:
+            try:
+                doc = primary["db"].admin_settings.find_one({"_id": "global_config"})
+                if doc:
+                    for k, v in doc.items():
+                        if k != "_id":
+                            merged[k] = v
+            except Exception:
+                pass
+        ram_cache.set("cv_settings:global", merged, ttl_sec=15)
+        return copy.deepcopy(merged)
+
+    def save_admin_settings(self, patch_dict, reset_defaults=False):
+        primary = self.get_primary_db()
+        if not primary:
+            return False
+        if reset_defaults:
+            new_cfg = copy.deepcopy(DEFAULT_ADMIN_SETTINGS)
+        else:
+            new_cfg = self.get_admin_settings()
+            for k, v in (patch_dict or {}).items():
+                if k in DEFAULT_ADMIN_SETTINGS:
+                    new_cfg[k] = v
+        new_cfg["updated_at"] = now_ist_str()
+        primary["db"].admin_settings.update_one(
+            {"_id": "global_config"},
+            {"$set": new_cfg},
+            upsert=True
+        )
+        ram_cache.invalidate_prefix("cv_settings")
+        ram_cache.invalidate_prefix("cv_summary")
+        return True
+
+    # ---------------- SCANNER TOKENS ----------------
     def get_scanner_tokens(self):
         tokens = []
         seen = set()
-
         if config.SCANNER_TOKENS_RAW:
             for part in config.SCANNER_TOKENS_RAW.replace("\n", ",").split(","):
                 p = part.strip()
@@ -171,7 +269,6 @@ class CourseVaultDB:
                     if tok and tok not in seen:
                         seen.add(tok)
                         tokens.append({"user_id": uid, "token": tok, "source": "env"})
-
         primary = self.get_primary_db()
         if primary:
             try:
@@ -216,6 +313,7 @@ class CourseVaultDB:
             return False
         return primary["db"].scanner_tokens.delete_one({"user_id": str(user_id).strip()}).deleted_count > 0
 
+    # ---------------- COURSES ----------------
     def upsert_course(self, course_obj):
         primary = self.get_primary_db()
         cid = str(course_obj.get("id") or course_obj.get("course_id") or "").strip()
@@ -223,8 +321,6 @@ class CourseVaultDB:
             return False
         raw_logo = str(course_obj.get("exam_logo") or course_obj.get("course_thumbnail") or "").replace("\\/", "/").strip()
         now_str = now_ist_str()
-        now_ts = int(time.time())
-
         set_doc = {
             "course_id": cid,
             "id": cid,
@@ -233,15 +329,23 @@ class CourseVaultDB:
             "source_logo": raw_logo,
             "test_series_id": str(course_obj.get("test_series_id") or ""),
             "updated_at": now_str,
-            "ts": now_ts
+            "ts": int(time.time())
         }
         on_insert = {
             "drive_thumb_id": "",
             "drive_thumb_url": "",
             "thumb_status": "pending" if raw_logo.startswith("http") else "none",
             "playback_mode": "vault_first",
+            "upload_mode": "both",
+            "priority": "normal",
+            "tg_channel_id": "",
+            "tg_invite_link": "",
+            "pinned_index_msg_id": 0,
+            "seq_counter": 0,
             "first_saved_at": now_str
         }
+        for k in list(set_doc.keys()):
+            on_insert.pop(k, None)
         primary["db"].courses.update_one(
             {"course_id": cid},
             {"$set": set_doc, "$setOnInsert": on_insert},
@@ -250,6 +354,29 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix("cv_courses")
         ram_cache.invalidate_prefix("cv_summary")
         return True
+
+    def update_course_config(self, course_id, data):
+        primary = self.get_primary_db()
+        cid = str(course_id or "").strip()
+        if not primary or not cid:
+            return False
+        upd = {"updated_at": now_ist_str()}
+        if "tg_channel_id" in data:
+            upd["tg_channel_id"] = str(data.get("tg_channel_id") or "").strip()
+        if "tg_invite_link" in data:
+            upd["tg_invite_link"] = str(data.get("tg_invite_link") or "").strip()
+        if data.get("upload_mode") in ("both", "tg_only", "yt_only"):
+            upd["upload_mode"] = data["upload_mode"]
+        if data.get("priority") in ("high", "normal", "low"):
+            upd["priority"] = data["priority"]
+        if data.get("playback_mode") in ("vault_first", "hls_live"):
+            upd["playback_mode"] = data["playback_mode"]
+        res = primary["db"].courses.update_one({"course_id": cid}, {"$set": upd})
+        ram_cache.invalidate_prefix("cv_")
+        return res.matched_count > 0
+
+    def set_course_playback_mode(self, course_id, mode):
+        return self.update_course_config(course_id, {"playback_mode": mode})
 
     def delete_course(self, course_id):
         cid = str(course_id or "").strip()
@@ -271,19 +398,21 @@ class CourseVaultDB:
         ram_cache.invalidate_prefix("cv_")
         return True
 
-    def clear_pending_queue(self, course_id=""):
-        deleted = 0
-        q = {"status": {"$in": ["pending", "processing", "failed"]}}
-        if course_id:
-            q["course_id"] = str(course_id).strip()
-        for entry in self.dbs:
-            try:
-                res = entry["db"].lectures.delete_many(q)
-                deleted += res.deleted_count
-            except Exception:
-                continue
-        ram_cache.invalidate_prefix("cv_")
-        return deleted
+    def _classify_yt(self, row):
+        if row.get("yt_video_id"):
+            return "completed"
+        st = row.get("yt_status") or row.get("status") or "pending"
+        if st == "failed":
+            return "failed"
+        return "pending"
+
+    def _classify_tg(self, row):
+        if row.get("tg_video_msg_id"):
+            return "completed"
+        st = row.get("tg_status") or "pending"
+        if st == "failed":
+            return "failed"
+        return "pending"
 
     def get_all_courses(self):
         cached = ram_cache.get("cv_courses:all")
@@ -294,40 +423,52 @@ class CourseVaultDB:
             return []
         docs = [_clean_doc(d) for d in primary["db"].courses.find().sort("ts", DESCENDING)]
 
-        total_map, ready_map, pending_map = {}, {}, {}
+        stats = {}
         for entry in self.dbs:
             try:
-                for row in entry["db"].lectures.find({}, {"course_id": 1, "status": 1, "yt_video_id": 1}):
+                proj = {"course_id": 1, "status": 1, "yt_video_id": 1, "yt_status": 1, "tg_video_msg_id": 1, "tg_status": 1}
+                for row in entry["db"].lectures.find({}, proj):
                     cid = str(row.get("course_id") or "")
-                    total_map[cid] = total_map.get(cid, 0) + 1
-                    if row.get("status") == "completed" and row.get("yt_video_id"):
-                        ready_map[cid] = ready_map.get(cid, 0) + 1
-                    else:
-                        pending_map[cid] = pending_map.get(cid, 0) + 1
+                    st = stats.setdefault(cid, {
+                        "total": 0,
+                        "yt_c": 0, "yt_p": 0, "yt_f": 0,
+                        "tg_c": 0, "tg_p": 0, "tg_f": 0
+                    })
+                    st["total"] += 1
+                    yc = self._classify_yt(row)
+                    tc = self._classify_tg(row)
+                    if yc == "completed": st["yt_c"] += 1
+                    elif yc == "failed": st["yt_f"] += 1
+                    else: st["yt_p"] += 1
+                    if tc == "completed": st["tg_c"] += 1
+                    elif tc == "failed": st["tg_f"] += 1
+                    else: st["tg_p"] += 1
             except Exception:
                 continue
 
         for d in docs:
             cid = d["course_id"]
-            d["total_lectures"] = total_map.get(cid, 0)
-            d["yt_ready_lectures"] = ready_map.get(cid, 0)
-            d["pending_lectures"] = pending_map.get(cid, 0)
+            st = stats.get(cid, {"total": 0, "yt_c": 0, "yt_p": 0, "yt_f": 0, "tg_c": 0, "tg_p": 0, "tg_f": 0})
+            d["total_lectures"] = st["total"]
+            d["yt_ready_lectures"] = st["yt_c"]
+            d["pending_lectures"] = st["yt_p"] + st["yt_f"]
+            d["yt_completed"] = st["yt_c"]
+            d["yt_pending"] = st["yt_p"]
+            d["yt_failed"] = st["yt_f"]
+            d["tg_completed"] = st["tg_c"]
+            d["tg_pending"] = st["tg_p"]
+            d["tg_failed"] = st["tg_f"]
+            d["upload_mode"] = d.get("upload_mode") or "both"
+            d["priority"] = d.get("priority") or "normal"
+            d["tg_channel_id"] = d.get("tg_channel_id") or ""
+            d["tg_invite_link"] = d.get("tg_invite_link") or ""
             d["exam_logo"] = d.get("drive_thumb_url") or d.get("source_logo") or ""
 
-        ram_cache.set("cv_courses:all", docs, ttl_sec=45)
+        docs.sort(key=lambda x: (PRIORITY_ORDER.get(x.get("priority", "normal"), 2), -(x.get("ts") or 0)))
+        ram_cache.set("cv_courses:all", docs, ttl_sec=25)
         return docs
 
-    def set_course_playback_mode(self, course_id, mode):
-        primary = self.get_primary_db()
-        if not primary or mode not in ("vault_first", "hls_live"):
-            return False
-        res = primary["db"].courses.update_one(
-            {"course_id": str(course_id).strip()},
-            {"$set": {"playback_mode": mode, "updated_at": now_ist_str()}}
-        )
-        ram_cache.invalidate_prefix("cv_courses")
-        return res.matched_count > 0
-
+    # ---------------- SUBJECTS & TOPICS ----------------
     def upsert_subject(self, course_id, sub_obj):
         primary = self.get_primary_db()
         cid = str(course_id or "").strip()
@@ -336,30 +477,46 @@ class CourseVaultDB:
             return False
         raw_logo = str(sub_obj.get("subject_logo") or "").replace("\\/", "/").strip()
         now_str = now_ist_str()
-
+        set_doc = {
+            "course_id": cid,
+            "subject_id": sid,
+            "subjectid": sid,
+            "subject_name": str(sub_obj.get("subject_name") or sub_obj.get("subjectname") or f"Subject #{sid}").strip(),
+            "source_logo": raw_logo,
+            "updated_at": now_str,
+            "ts": int(time.time())
+        }
+        on_insert = {
+            "drive_logo_id": "",
+            "drive_logo_url": "",
+            "logo_status": "pending" if raw_logo.startswith("http") else "none",
+            "tg_channel_id": "",
+            "tg_topic_id": "",
+            "first_saved_at": now_str
+        }
+        for k in list(set_doc.keys()):
+            on_insert.pop(k, None)
         primary["db"].subjects.update_one(
             {"course_id": cid, "subject_id": sid},
-            {
-                "$set": {
-                    "course_id": cid,
-                    "subject_id": sid,
-                    "subjectid": sid,
-                    "subject_name": str(sub_obj.get("subject_name") or sub_obj.get("subjectname") or f"Subject #{sid}").strip(),
-                    "source_logo": raw_logo,
-                    "updated_at": now_str,
-                    "ts": int(time.time())
-                },
-                "$setOnInsert": {
-                    "drive_logo_id": "",
-                    "drive_logo_url": "",
-                    "logo_status": "pending" if raw_logo.startswith("http") else "none",
-                    "first_saved_at": now_str
-                }
-            },
+            {"$set": set_doc, "$setOnInsert": on_insert},
             upsert=True
         )
         ram_cache.invalidate_prefix(f"cv_subjects:{cid}")
         return True
+
+    def update_subject_config(self, course_id, subject_id, data):
+        primary = self.get_primary_db()
+        cid, sid = str(course_id or "").strip(), str(subject_id or "").strip()
+        if not primary or not cid or not sid:
+            return False
+        upd = {"updated_at": now_ist_str()}
+        if "tg_channel_id" in data:
+            upd["tg_channel_id"] = str(data.get("tg_channel_id") or "").strip()
+        if "tg_topic_id" in data:
+            upd["tg_topic_id"] = str(data.get("tg_topic_id") or "").strip()
+        res = primary["db"].subjects.update_one({"course_id": cid, "subject_id": sid}, {"$set": upd})
+        ram_cache.invalidate_prefix(f"cv_subjects:{cid}")
+        return res.matched_count > 0
 
     def get_course_subjects(self, course_id):
         cid = str(course_id or "").strip()
@@ -372,7 +529,9 @@ class CourseVaultDB:
         docs = [_clean_doc(d) for d in primary["db"].subjects.find({"course_id": cid}).sort("ts", 1)]
         for d in docs:
             d["subject_logo"] = d.get("drive_logo_url") or d.get("source_logo") or ""
-        ram_cache.set(f"cv_subjects:{cid}", docs, ttl_sec=60)
+            d["tg_channel_id"] = d.get("tg_channel_id") or ""
+            d["tg_topic_id"] = d.get("tg_topic_id") or ""
+        ram_cache.set(f"cv_subjects:{cid}", docs, ttl_sec=45)
         return docs
 
     def upsert_topic(self, course_id, subject_id, top_obj):
@@ -412,20 +571,42 @@ class CourseVaultDB:
         if not primary or not cid or not sid:
             return []
         docs = [_clean_doc(d) for d in primary["db"].topics.find({"course_id": cid, "subject_id": sid}).sort("ts", 1)]
-        ram_cache.set(key, docs, ttl_sec=60)
+        ram_cache.set(key, docs, ttl_sec=45)
         return docs
 
-    def _is_lecture_missing_assets(self, doc, raw_thumb="", has_pdf1=False, has_pdf2=False):
-        """Checks MongoDB doc for missing video, thumbnail, pdf1, or pdf2."""
+    # ---------------- LECTURES (DUAL CHECK: YT + DRIVE + TELEGRAM) ----------------
+    def _next_seq_no(self, course_id):
+        primary = self.get_primary_db()
+        if not primary:
+            return 1
+        doc = primary["db"].courses.find_one_and_update(
+            {"course_id": str(course_id)},
+            {"$inc": {"seq_counter": 1}},
+            return_document=True
+        )
+        return int((doc or {}).get("seq_counter") or 1)
+
+    def _is_lecture_missing_assets(self, doc, course_doc, raw_thumb="", has_pdf1=False, has_pdf2=False):
         if not doc:
             return True
-        if not str(doc.get("yt_video_id") or "").strip():
+        mode = (course_doc or {}).get("upload_mode", "both")
+        has_tg_target = bool((course_doc or {}).get("tg_channel_id"))
+        need_yt = mode in ("both", "yt_only")
+        need_tg = mode in ("both", "tg_only") and has_tg_target
+
+        if need_yt and not str(doc.get("yt_video_id") or "").strip():
+            return True
+        if need_tg and not str(doc.get("tg_video_msg_id") or "").strip():
             return True
         if raw_thumb and not str(doc.get("drive_thumb_id") or "").strip():
             return True
         if has_pdf1 and not str(doc.get("drive_pdf1_id") or "").strip():
             return True
         if has_pdf2 and not str(doc.get("drive_pdf2_id") or "").strip():
+            return True
+        if need_tg and has_pdf1 and not str(doc.get("tg_pdf1_msg_id") or "").strip():
+            return True
+        if need_tg and has_pdf2 and not str(doc.get("tg_pdf2_msg_id") or "").strip():
             return True
         return False
 
@@ -446,6 +627,8 @@ class CourseVaultDB:
                 return {"ok": False, "storage_full": True, "reason": f"All Course DBs hit {config.MAX_COURSE_DB_SIZE_MB} MB limit!"}
             is_new = True
 
+        primary = self.get_primary_db()
+        course_doc = primary["db"].courses.find_one({"course_id": str(course_id)}) if primary else {}
         raw_thumb = str(lec_obj.get("thumbnail") or "").replace("\\/", "/").strip()
         has_pdf1 = bool(str(lec_obj.get("pdf_link") or lec_obj.get("ypdf_link") or "").strip())
         has_pdf2 = bool(str(lec_obj.get("pdf_link2") or "").strip())
@@ -469,13 +652,26 @@ class CourseVaultDB:
 
         requeued = False
         if existing_doc:
-            if existing_doc.get("status") != "processing" and self._is_lecture_missing_assets(existing_doc, raw_thumb, has_pdf1, has_pdf2):
+            if not existing_doc.get("seq_no"):
+                set_fields["seq_no"] = self._next_seq_no(course_id)
+            if existing_doc.get("status") != "processing" and self._is_lecture_missing_assets(
+                existing_doc, course_doc, raw_thumb, has_pdf1, has_pdf2
+            ):
                 set_fields["status"] = "pending"
                 set_fields["error_message"] = ""
+                set_fields["next_retry_ts"] = 0
+                if not existing_doc.get("yt_video_id"):
+                    set_fields["yt_status"] = "pending"
+                if not existing_doc.get("tg_video_msg_id"):
+                    set_fields["tg_status"] = "pending"
                 requeued = True
 
+        seq_no = self._next_seq_no(course_id) if is_new else 0
         on_insert = {
+            "seq_no": seq_no,
             "status": "pending",
+            "yt_status": "pending",
+            "tg_status": "pending",
             "source_video_url": "",
             "source_pdf1_url": "",
             "source_pdf2_url": "",
@@ -484,13 +680,23 @@ class CourseVaultDB:
             "drive_pdf2_id": "",
             "drive_thumb_id": "",
             "drive_thumb_url": "",
+            "tg_video_msg_id": "",
+            "tg_pdf1_msg_id": "",
+            "tg_pdf2_msg_id": "",
+            "tg_channel_used": "",
+            "tg_topic_used": "",
+            "master_video_msg_id": "",
+            "master_pdf1_msg_id": "",
+            "master_pdf2_msg_id": "",
             "error_message": "",
+            "yt_error": "",
+            "tg_error": "",
             "retry_count": 0,
+            "next_retry_ts": 0,
             "first_saved_at": now_str,
             "ts": int(time.time())
         }
 
-        # Prevent MongoDB conflict (code 40) when a key is in both $set and $setOnInsert
         for k in list(set_fields.keys()):
             on_insert.pop(k, None)
 
@@ -498,35 +704,30 @@ class CourseVaultDB:
         if on_insert:
             update_doc["$setOnInsert"] = on_insert
 
-        target_shard["db"].lectures.update_one(
-            {"lecture_id": lid},
-            update_doc,
-            upsert=True
-        )
+        target_shard["db"].lectures.update_one({"lecture_id": lid}, update_doc, upsert=True)
         ram_cache.invalidate_prefix(f"cv_lectures:{course_id}:{subject_id}:{topic_id}")
         ram_cache.invalidate_prefix(f"cv_lec:{lid}")
         ram_cache.invalidate_prefix("cv_summary")
         return {"ok": True, "is_new": is_new, "requeued": requeued, "shard": target_shard["label"]}
 
     def recheck_scope(self, course_id="", subject_id="", topic_id="", lecture_id="", force_all=False):
-        """Admin Panel Folder/Course/Subject/Topic/Lecture Recheck."""
         q = {}
         if lecture_id:
             q["lecture_id"] = str(lecture_id).strip()
         else:
-            if course_id:
-                q["course_id"] = str(course_id).strip()
-            if subject_id:
-                q["subject_id"] = str(subject_id).strip()
-            if topic_id:
-                q["topic_id"] = str(topic_id).strip()
+            if course_id: q["course_id"] = str(course_id).strip()
+            if subject_id: q["subject_id"] = str(subject_id).strip()
+            if topic_id: q["topic_id"] = str(topic_id).strip()
 
         if not force_all and not lecture_id:
             q["$or"] = [
                 {"yt_video_id": {"$in": ["", None]}},
+                {"tg_video_msg_id": {"$in": ["", None]}},
                 {"drive_thumb_id": {"$in": ["", None]}},
                 {"drive_pdf1_id": {"$in": ["", None]}},
-                {"status": {"$in": ["failed", "processing"]}}
+                {"status": {"$in": ["failed", "processing"]}},
+                {"yt_status": "failed"},
+                {"tg_status": "failed"}
             ]
 
         count = 0
@@ -534,7 +735,43 @@ class CourseVaultDB:
             try:
                 res = entry["db"].lectures.update_many(
                     q,
-                    {"$set": {"status": "pending", "error_message": "", "updated_at": now_ist_str()}}
+                    {"$set": {
+                        "status": "pending",
+                        "error_message": "",
+                        "next_retry_ts": 0,
+                        "retry_count": 0,
+                        "updated_at": now_ist_str()
+                    }}
+                )
+                count += res.modified_count
+            except Exception:
+                continue
+        ram_cache.invalidate_prefix("cv_")
+        return count
+
+    def clear_pending_queue(self, course_id=""):
+        deleted = 0
+        q = {"status": {"$in": ["pending", "processing", "failed"]}}
+        if course_id:
+            q["course_id"] = str(course_id).strip()
+        for entry in self.dbs:
+            try:
+                deleted += entry["db"].lectures.delete_many(q).deleted_count
+            except Exception:
+                continue
+        ram_cache.invalidate_prefix("cv_")
+        return deleted
+
+    def reset_failed_lectures_to_pending(self, lecture_id=""):
+        count = 0
+        q = {"lecture_id": str(lecture_id).strip()} if lecture_id else {
+            "$or": [{"status": {"$in": ["failed", "processing"]}}, {"yt_status": "failed"}, {"tg_status": "failed"}]
+        }
+        for entry in self.dbs:
+            try:
+                res = entry["db"].lectures.update_many(
+                    q,
+                    {"$set": {"status": "pending", "error_message": "", "next_retry_ts": 0, "retry_count": 0}}
                 )
                 count += res.modified_count
             except Exception:
@@ -543,18 +780,45 @@ class CourseVaultDB:
         return count
 
     def claim_next_lecture_one_by_one(self):
+        cfg = self.get_admin_settings()
+        if cfg.get("worker_paused"):
+            return None
+
         for entry in self.dbs:
             try:
-                busy = entry["db"].lectures.find_one({"status": "processing"})
-                if busy:
+                if entry["db"].lectures.find_one({"status": "processing"}):
                     return None
             except Exception:
                 continue
 
+        now_ts = int(time.time())
+        courses = self.get_all_courses()
+        ordered_cids = [c["course_id"] for c in courses]
+
+        base_filter = {
+            "status": "pending",
+            "$or": [{"next_retry_ts": {"$exists": False}}, {"next_retry_ts": {"$lte": now_ts}}]
+        }
+
+        for cid in ordered_cids:
+            for entry in self.dbs:
+                try:
+                    doc = entry["db"].lectures.find_one_and_update(
+                        {**base_filter, "course_id": cid},
+                        {"$set": {"status": "processing", "updated_at": now_ist_str()}},
+                        sort=[("seq_no", 1), ("ts", 1)],
+                        return_document=True
+                    )
+                    if doc:
+                        ram_cache.invalidate_prefix("cv_summary")
+                        return _clean_doc(doc)
+                except Exception:
+                    continue
+
         for entry in self.dbs:
             try:
                 doc = entry["db"].lectures.find_one_and_update(
-                    {"status": "pending"},
+                    base_filter,
                     {"$set": {"status": "processing", "updated_at": now_ist_str()}},
                     sort=[("ts", 1)],
                     return_document=True
@@ -566,29 +830,52 @@ class CourseVaultDB:
                 continue
         return None
 
-    def finish_lecture_item(self, lecture_id, ok=True, yt_video_id="", drive_pdf1_id="", drive_pdf2_id="", drive_thumb_id="", error_message=""):
+    def finish_lecture_item(self, lecture_id, ok=True, **kwargs):
         lid = str(lecture_id or "").strip()
         shard = self._find_lecture_shard(lid)
         if not shard:
             return False
         upd = {
             "status": "completed" if ok else "failed",
-            "error_message": "" if ok else str(error_message or "Download/Upload failed")[:200],
+            "error_message": "" if ok else str(kwargs.get("error_message") or "Upload failed")[:220],
             "updated_at": now_ist_str()
         }
-        if yt_video_id:
-            upd["yt_video_id"] = str(yt_video_id).strip()
-        if drive_pdf1_id:
-            upd["drive_pdf1_id"] = str(drive_pdf1_id).strip()
-        if drive_pdf2_id:
-            upd["drive_pdf2_id"] = str(drive_pdf2_id).strip()
-        if drive_thumb_id:
-            upd["drive_thumb_id"] = str(drive_thumb_id).strip()
-            upd["drive_thumb_url"] = drive_image_url(drive_thumb_id)
+        str_fields = (
+            "yt_video_id", "drive_pdf1_id", "drive_pdf2_id", "drive_thumb_id",
+            "tg_video_msg_id", "tg_pdf1_msg_id", "tg_pdf2_msg_id",
+            "tg_channel_used", "tg_topic_used",
+            "master_video_msg_id", "master_pdf1_msg_id", "master_pdf2_msg_id",
+            "yt_status", "tg_status", "yt_error", "tg_error"
+        )
+        for f in str_fields:
+            if kwargs.get(f) is not None and str(kwargs.get(f)).strip() != "":
+                upd[f] = str(kwargs[f]).strip()
+        if kwargs.get("drive_thumb_id"):
+            upd["drive_thumb_url"] = drive_image_url(kwargs["drive_thumb_id"])
+        if "next_retry_ts" in kwargs:
+            upd["next_retry_ts"] = int(kwargs["next_retry_ts"] or 0)
+        if "retry_count" in kwargs:
+            upd["retry_count"] = int(kwargs["retry_count"] or 0)
 
         shard["db"].lectures.update_one({"lecture_id": lid}, {"$set": upd})
         ram_cache.invalidate_prefix("cv_")
         return True
+
+    def _enrich_lecture_for_portal(self, doc, course_doc, cfg):
+        c = _clean_doc(doc)
+        c["playback_mode"] = (course_doc or {}).get("playback_mode", "vault_first")
+        c["thumbnail"] = c.get("drive_thumb_url") or c.get("source_thumb") or ""
+        c["drive_pdf1_url"] = f"https://drive.google.com/file/d/{c['drive_pdf1_id']}/preview" if c.get("drive_pdf1_id") else ""
+        c["drive_pdf2_url"] = f"https://drive.google.com/file/d/{c['drive_pdf2_id']}/preview" if c.get("drive_pdf2_id") else ""
+        c["portal_tg_fallback"] = bool(cfg.get("portal_tg_fallback", True))
+        c["tg_invite_link"] = (course_doc or {}).get("tg_invite_link") or ""
+        ch_id = str(c.get("tg_channel_used") or (course_doc or {}).get("tg_channel_id") or "")
+        msg_id = str(c.get("tg_video_msg_id") or "")
+        if ch_id.startswith("-100") and msg_id.isdigit():
+            c["tg_watch_url"] = f"https://t.me/c/{ch_id[4:]}/{msg_id}"
+        else:
+            c["tg_watch_url"] = c["tg_invite_link"]
+        return c
 
     def get_topic_lectures(self, course_id, subject_id, topic_id):
         cid, sid, tid = str(course_id), str(subject_id), str(topic_id)
@@ -596,25 +883,17 @@ class CourseVaultDB:
         cached = ram_cache.get(key)
         if cached is not None:
             return cached
-
         primary = self.get_primary_db()
-        course_doc = primary["db"].courses.find_one({"course_id": cid}, {"playback_mode": 1}) if primary else None
-        playback_mode = (course_doc or {}).get("playback_mode", "vault_first")
-
+        course_doc = primary["db"].courses.find_one({"course_id": cid}) if primary else {}
+        cfg = self.get_admin_settings()
         merged = []
         for entry in self.dbs:
             try:
-                for d in entry["db"].lectures.find({"course_id": cid, "subject_id": sid, "topic_id": tid}).sort("ts", 1):
-                    c = _clean_doc(d)
-                    c["playback_mode"] = playback_mode
-                    c["thumbnail"] = c.get("drive_thumb_url") or c.get("source_thumb") or ""
-                    c["drive_pdf1_url"] = f"https://drive.google.com/file/d/{c['drive_pdf1_id']}/preview" if c.get("drive_pdf1_id") else ""
-                    c["drive_pdf2_url"] = f"https://drive.google.com/file/d/{c['drive_pdf2_id']}/preview" if c.get("drive_pdf2_id") else ""
-                    merged.append(c)
+                for d in entry["db"].lectures.find({"course_id": cid, "subject_id": sid, "topic_id": tid}).sort([("seq_no", 1), ("ts", 1)]):
+                    merged.append(self._enrich_lecture_for_portal(d, course_doc, cfg))
             except Exception:
                 continue
-
-        ram_cache.set(key, merged, ttl_sec=45)
+        ram_cache.set(key, merged, ttl_sec=35)
         return merged
 
     def get_single_lecture(self, lecture_id):
@@ -628,50 +907,88 @@ class CourseVaultDB:
         doc = shard["db"].lectures.find_one({"lecture_id": lid})
         if not doc:
             return None
-        c = _clean_doc(doc)
         primary = self.get_primary_db()
-        course_doc = primary["db"].courses.find_one({"course_id": c.get("course_id", "")}, {"playback_mode": 1}) if primary else None
-        c["playback_mode"] = (course_doc or {}).get("playback_mode", "vault_first")
-        c["thumbnail"] = c.get("drive_thumb_url") or c.get("source_thumb") or ""
-        c["drive_pdf1_url"] = f"https://drive.google.com/file/d/{c['drive_pdf1_id']}/preview" if c.get("drive_pdf1_id") else ""
-        c["drive_pdf2_url"] = f"https://drive.google.com/file/d/{c['drive_pdf2_id']}/preview" if c.get("drive_pdf2_id") else ""
-        ram_cache.set(f"cv_lec:{lid}", c, ttl_sec=60)
+        course_doc = primary["db"].courses.find_one({"course_id": doc.get("course_id", "")}) if primary else {}
+        c = self._enrich_lecture_for_portal(doc, course_doc, self.get_admin_settings())
+        ram_cache.set(f"cv_lec:{lid}", c, ttl_sec=45)
         return c
 
-    def manual_override_lecture(self, lecture_id, yt_video_id="", drive_pdf1_id="", drive_pdf2_id="", drive_thumb_id=""):
+    def manual_override_lecture(self, lecture_id, **kwargs):
         lid = str(lecture_id or "").strip()
         shard = self._find_lecture_shard(lid)
         if not shard:
             return False
         upd = {"updated_at": now_ist_str()}
-        if yt_video_id is not None and str(yt_video_id).strip():
-            upd["yt_video_id"] = str(yt_video_id).strip()
+        if str(kwargs.get("yt_video_id") or "").strip():
+            upd["yt_video_id"] = str(kwargs["yt_video_id"]).strip()
+            upd["yt_status"] = "completed"
             upd["status"] = "completed"
             upd["error_message"] = ""
-        if drive_pdf1_id is not None and str(drive_pdf1_id).strip():
-            upd["drive_pdf1_id"] = str(drive_pdf1_id).strip()
-        if drive_pdf2_id is not None and str(drive_pdf2_id).strip():
-            upd["drive_pdf2_id"] = str(drive_pdf2_id).strip()
-        if drive_thumb_id is not None and str(drive_thumb_id).strip():
-            upd["drive_thumb_id"] = str(drive_thumb_id).strip()
-            upd["drive_thumb_url"] = drive_image_url(drive_thumb_id)
-
+        for k in ("drive_pdf1_id", "drive_pdf2_id", "tg_video_msg_id", "tg_pdf1_msg_id", "tg_pdf2_msg_id"):
+            if str(kwargs.get(k) or "").strip():
+                upd[k] = str(kwargs[k]).strip()
+                if k == "tg_video_msg_id":
+                    upd["tg_status"] = "completed"
+        if str(kwargs.get("drive_thumb_id") or "").strip():
+            tid = str(kwargs["drive_thumb_id"]).strip()
+            upd["drive_thumb_id"] = tid
+            upd["drive_thumb_url"] = drive_image_url(tid)
         shard["db"].lectures.update_one({"lecture_id": lid}, {"$set": upd})
         ram_cache.invalidate_prefix("cv_")
         return True
 
-    def reset_failed_lectures_to_pending(self, lecture_id=""):
-        count = 0
-        q = {"lecture_id": str(lecture_id).strip()} if lecture_id else {"status": {"$in": ["failed", "processing"]}}
+    # ---------------- 1-CLICK CHANNEL RESTORE JOBS ----------------
+    def create_restore_job(self, course_id, target_channel_id):
+        primary = self.get_primary_db()
+        cid = str(course_id or "").strip()
+        tgt = str(target_channel_id or "").strip()
+        if not primary or not cid or not tgt:
+            return False, "Course ID aur Target Channel ID zaroori hai."
+        job = {
+            "job_id": f"rst_{cid}_{int(time.time())}",
+            "course_id": cid,
+            "target_channel_id": tgt,
+            "status": "pending",
+            "done": 0,
+            "total": 0,
+            "message": "Queued for Termux Restore Worker...",
+            "created_at": now_ist_str(),
+            "ts": int(time.time())
+        }
+        primary["db"].restore_jobs.insert_one(job)
+        primary["db"].courses.update_one({"course_id": cid}, {"$set": {"tg_channel_id": tgt}})
+        ram_cache.invalidate_prefix("cv_")
+        return True, f"Restore job queued for Batch #{cid} -> {tgt}"
+
+    def list_restore_jobs(self):
+        primary = self.get_primary_db()
+        if not primary:
+            return []
+        return [_clean_doc(d) for d in primary["db"].restore_jobs.find().sort("ts", DESCENDING).limit(20)]
+
+    # ---------------- JSON FULL BACKUP EXPORT ----------------
+    def export_full_backup_json(self):
+        primary = self.get_primary_db()
+        data = {
+            "exported_at": now_ist_str(),
+            "settings": self.get_admin_settings(),
+            "courses": [],
+            "subjects": [],
+            "topics": [],
+            "lectures": []
+        }
+        if primary:
+            data["courses"] = [_clean_doc(x) for x in primary["db"].courses.find()]
+            data["subjects"] = [_clean_doc(x) for x in primary["db"].subjects.find()]
+            data["topics"] = [_clean_doc(x) for x in primary["db"].topics.find()]
         for entry in self.dbs:
             try:
-                res = entry["db"].lectures.update_many(q, {"$set": {"status": "pending", "error_message": ""}})
-                count += res.modified_count
+                data["lectures"].extend([_clean_doc(x) for x in entry["db"].lectures.find()])
             except Exception:
                 continue
-        ram_cache.invalidate_prefix("cv_")
-        return count
+        return data
 
+    # ---------------- WORKER HEARTBEAT & DIRECT SUMMARY ----------------
     def get_worker_heartbeat(self):
         primary = self.get_primary_db()
         if not primary:
@@ -691,10 +1008,9 @@ class CourseVaultDB:
         cached = ram_cache.get("cv_summary:main")
         if cached is not None:
             return cached
-
         primary = self.get_primary_db()
-        total_courses = total_subjects = total_topics = 0
-        courses_thumbs_ready = subjects_logos_ready = 0
+        total_courses = total_subjects = total_topics = courses_thumbs_ready = subjects_logos_ready = 0
+        active_restores = 0
         if primary:
             try:
                 total_courses = primary["db"].courses.count_documents({})
@@ -702,10 +1018,12 @@ class CourseVaultDB:
                 total_subjects = primary["db"].subjects.count_documents({})
                 subjects_logos_ready = primary["db"].subjects.count_documents({"drive_logo_id": {"$ne": ""}})
                 total_topics = primary["db"].topics.count_documents({})
+                active_restores = primary["db"].restore_jobs.count_documents({"status": {"$in": ["pending", "running"]}})
             except Exception:
                 pass
 
         total_lectures = yt_ready = pdf_ready = thumbs_ready = pending = failed = processing = 0
+        yt_c = yt_p = yt_f = tg_c = tg_p = tg_f = tg_pdf_ready = 0
         per_shard = []
         any_space = False
 
@@ -714,6 +1032,14 @@ class CourseVaultDB:
             try:
                 l_cnt = db.lectures.count_documents({})
                 y_cnt = db.lectures.count_documents({"yt_video_id": {"$ne": ""}})
+                yf_cnt = db.lectures.count_documents({"yt_video_id": {"$in": ["", None]}, "$or": [{"yt_status": "failed"}, {"status": "failed"}]})
+                yp_cnt = max(0, l_cnt - y_cnt - yf_cnt)
+
+                tgc_cnt = db.lectures.count_documents({"tg_video_msg_id": {"$nin": ["", None]}})
+                tgf_cnt = db.lectures.count_documents({"tg_video_msg_id": {"$in": ["", None]}, "tg_status": "failed"})
+                tgp_cnt = max(0, l_cnt - tgc_cnt - tgf_cnt)
+                tgpdf_cnt = db.lectures.count_documents({"$or": [{"tg_pdf1_msg_id": {"$nin": ["", None]}}, {"tg_pdf2_msg_id": {"$nin": ["", None]}}]})
+
                 p_cnt = db.lectures.count_documents({"$or": [{"drive_pdf1_id": {"$ne": ""}}, {"drive_pdf2_id": {"$ne": ""}}]})
                 t_cnt = db.lectures.count_documents({"drive_thumb_id": {"$ne": ""}})
                 pen_cnt = db.lectures.count_documents({"status": "pending"})
@@ -726,6 +1052,9 @@ class CourseVaultDB:
 
                 total_lectures += l_cnt
                 yt_ready += y_cnt
+                yt_c += y_cnt; yt_p += yp_cnt; yt_f += yf_cnt
+                tg_c += tgc_cnt; tg_p += tgp_cnt; tg_f += tgf_cnt
+                tg_pdf_ready += tgpdf_cnt
                 pdf_ready += p_cnt
                 thumbs_ready += t_cnt
                 pending += pen_cnt
@@ -736,6 +1065,7 @@ class CourseVaultDB:
                     "label": entry["label"],
                     "lectures": l_cnt,
                     "yt_ready": y_cnt,
+                    "tg_ready": tgc_cnt,
                     "size_mb": mb,
                     "max_mb": config.MAX_COURSE_DB_SIZE_MB,
                     "is_full": is_full
@@ -754,17 +1084,25 @@ class CourseVaultDB:
             "total_topics": total_topics,
             "total_lectures": total_lectures,
             "yt_ready": yt_ready,
+            "yt_completed": yt_c,
+            "yt_pending": yt_p,
+            "yt_failed": yt_f,
+            "tg_completed": tg_c,
+            "tg_pending": tg_p,
+            "tg_failed": tg_f,
+            "tg_pdf_ready": tg_pdf_ready,
             "pdf_ready": pdf_ready,
             "thumbs_ready": thumbs_ready,
             "pending_queue": pending,
             "processing_now": processing,
             "failed_queue": failed,
+            "active_restore_jobs": active_restores,
             "per_shard": per_shard,
             "worker": self.get_worker_heartbeat(),
             "ram_cache": ram_cache.stats(),
             "updated_at": now_ist_str()
         }
-        ram_cache.set("cv_summary:main", summary, ttl_sec=20)
+        ram_cache.set("cv_summary:main", summary, ttl_sec=15)
         return summary
 
 
